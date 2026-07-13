@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: order-service-migration
+  labels:
+    app: order-service
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app: order-service-migration
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migration
+          image: postgres:17-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+
+              echo "Ожидание PostgreSQL ${DB_HOST}:${DB_PORT}..."
+
+              until PGPASSWORD="${DB_PASSWORD}" pg_isready \
+                -h "${DB_HOST}" \
+                -p "${DB_PORT}" \
+                -U "${DB_USERNAME}" \
+                -d "${DB_NAME}"
+              do
+                sleep 2
+              done
+
+              echo "PostgreSQL доступен. Выполняем миграцию."
+
+              PGPASSWORD="${DB_PASSWORD}" psql \
+                -v ON_ERROR_STOP=1 \
+                -h "${DB_HOST}" \
+                -p "${DB_PORT}" \
+                -U "${DB_USERNAME}" \
+                -d "${DB_NAME}" \
+                -f /migrations/001_create_users.sql
+
+              echo "Миграция успешно выполнена."
+          envFrom:
+            - configMapRef:
+                name: order-service-config
+          env:
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: order-service-db-secret
+                  key: DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: order-service-db-secret
+                  key: DB_PASSWORD
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+              readOnly: true
+      volumes:
+        - name: migrations
+          configMap:
+            name: order-service-migrations

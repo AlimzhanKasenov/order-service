@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: order-service-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: users
+      POSTGRES_USER: order_user
+      POSTGRES_PASSWORD: order_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - order-service-postgres-data:/var/lib/postgresql/data
+      - ./migrations/001_create_users.sql:/docker-entrypoint-initdb.d/001_create_users.sql:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U order_user -d users
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  order-service:
+    build:
+      context: .
+    container_name: order-service
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: "8000"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: users
+      DB_SSLMODE: disable
+      DB_USERNAME: order_user
+      DB_PASSWORD: order_password
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  order-service-postgres-data:

@@ -1,2 +1,7 @@
-.idea/minikube-linux-amd64
 .idea/
+.vscode/
+.env
+order-service
+order-service.exe
+*.log
+*.out

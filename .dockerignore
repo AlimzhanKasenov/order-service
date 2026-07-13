@@ -1,5 +1,11 @@
 .git
+.gitignore
 .idea
 .vscode
+k8s
+postman
+migrations
 README.md
+docker-compose.yaml
+*.log
 order-service
