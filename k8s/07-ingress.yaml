@@ -10,7 +10,9 @@ spec:
     - host: arch.homework
       http:
         paths:
-          - path: /health
+          # Основной адрес нового задания:
+          # http://arch.homework/user
+          - path: /
             pathType: Prefix
             backend:
               service:
@@ -34,6 +36,9 @@ spec:
     - host: arch.homework
       http:
         paths:
+          # Сохраняем маршрут из предыдущего домашнего задания:
+          # /otusapp/alimzhan/health -> /health
+          # /otusapp/alimzhan/user   -> /user
           - path: /otusapp/alimzhan(/|$)(.*)
             pathType: ImplementationSpecific
             backend:

@@ -1,0 +1,63 @@
+newman
+
+Order Service User CRUD
+
+→ 01 - Health check
+  GET http://arch.homework/health [200 OK, 163B, 65ms]
+  ✓  Status code is 200
+  ✓  Health status is OK
+
+→ 02 - Create user
+  POST http://arch.homework/user [201 Created, 300B, 9ms]
+  ✓  Status code is 201
+  ✓  Created user has id
+  ✓  Created username is correct
+
+→ 03 - Get user by id
+  GET http://arch.homework/user/3 [200 OK, 295B, 6ms]
+  ✓  Status code is 200
+  ✓  Returned user id is correct
+
+→ 04 - Get all users
+  GET http://arch.homework/user [200 OK, 297B, 6ms]
+  ✓  Status code is 200
+  ✓  Created user exists in list
+
+→ 05 - Update user
+  PUT http://arch.homework/user/3 [200 OK, 297B, 12ms]
+  ✓  Status code is 200
+  ✓  User data was updated
+
+→ 06 - Get updated user
+  GET http://arch.homework/user/3 [200 OK, 297B, 6ms]
+  ✓  Status code is 200
+  ✓  Updated values were saved
+
+→ 07 - Delete user
+  DELETE http://arch.homework/user/3 [204 No Content, 88B, 9ms]
+  ✓  Status code is 204
+
+→ 08 - Verify user was deleted
+  GET http://arch.homework/user/3 [404 Not Found, 194B, 7ms]
+  ✓  Status code is 404
+  ✓  Error message confirms deletion
+
+┌─────────────────────────┬──────────────────┬──────────────────┐
+│                         │         executed │           failed │
+├─────────────────────────┼──────────────────┼──────────────────┤
+│              iterations │                1 │                0 │
+├─────────────────────────┼──────────────────┼──────────────────┤
+│                requests │                8 │                0 │
+├─────────────────────────┼──────────────────┼──────────────────┤
+│            test-scripts │                8 │                0 │
+├─────────────────────────┼──────────────────┼──────────────────┤
+│      prerequest-scripts │                8 │                0 │
+├─────────────────────────┼──────────────────┼──────────────────┤
+│              assertions │               16 │                0 │
+├─────────────────────────┴──────────────────┴──────────────────┤
+│ total run duration: 386ms                                     │
+├───────────────────────────────────────────────────────────────┤
+│ total data received: 797B (approx)                            │
+├───────────────────────────────────────────────────────────────┤
+│ average response time: 15ms [min: 6ms, max: 65ms, s.d.: 19ms] │
+└───────────────────────────────────────────────────────────────┘

@@ -1,0 +1,26 @@
+fullnameOverride: order-postgresql
+
+architecture: standalone
+
+auth:
+  enablePostgresUser: true
+  username: order_user
+  database: users
+  existingSecret: order-service-db-secret
+
+  secretKeys:
+    adminPasswordKey: postgres-password
+    userPasswordKey: password
+
+primary:
+  persistence:
+    enabled: true
+    size: 1Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

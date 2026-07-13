@@ -1,33 +1,36 @@
+cat > README.md <<'EOF'
 # Order Service
 
-Минимальный сервис заказов для учебного проекта BLT.
+Учебный RESTful CRUD-сервис пользователей на Go с PostgreSQL и развёртыванием в Kubernetes.
 
-## Health check
+## Возможности
 
-```http
-GET /health/
-```
+- создание пользователя;
+- получение пользователя по ID;
+- получение списка пользователей;
+- обновление пользователя;
+- удаление пользователя;
+- health-check приложения и PostgreSQL;
+- конфигурация приложения через ConfigMap;
+- доступы к PostgreSQL через Secret;
+- первоначальная миграция через Kubernetes Job;
+- доступ через Ingress по адресу `arch.homework`.
 
-Ответ:
+## API
 
-```json
-{"status":"OK"}
-```
+| Метод | URL | Описание |
+|---|---|---|
+| GET | `/health` | Проверка состояния сервиса |
+| GET | `/health/` | Проверка состояния сервиса |
+| POST | `/user` | Создание пользователя |
+| GET | `/user` | Получение списка пользователей |
+| GET | `/user/{id}` | Получение пользователя |
+| PUT | `/user/{id}` | Изменение пользователя |
+| DELETE | `/user/{id}` | Удаление пользователя |
 
-## Сборка Docker-образа
+## Локальный запуск
+
+Запустить PostgreSQL и приложение:
 
 ```bash
-docker build --platform linux/amd64 -t order-service:1.0.0 .
-```
-
-## Запуск контейнера
-
-```bash
-docker run --rm -p 8000:8000 order-service:1.0.0
-```
-
-## Проверка
-
-```bash
-curl http://localhost:8000/health/
-```
+docker compose up --build -d
