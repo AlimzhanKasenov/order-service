@@ -72,7 +72,7 @@ type Application struct {
 }
 
 func main() {
-	logger := log.New(os.Stdout, "", log.Ldate|log.Ltime|log.LUTC)
+	logger := newJSONLogger()
 
 	db, err := connectDatabase(logger)
 	if err != nil {
@@ -112,7 +112,15 @@ func main() {
 	serverErrors := make(chan error, 1)
 
 	go func() {
-		logger.Printf("Order service started on port :%s", serverPort)
+		emitStructuredLog(
+			"INFO",
+			"Приложение запущено",
+			map[string]any{
+				"event": "application_started",
+				"port":  serverPort,
+			},
+		)
+
 		serverErrors <- server.ListenAndServe()
 	}()
 
@@ -135,7 +143,13 @@ func main() {
 		logger.Printf("Ошибка корректной остановки HTTP-сервера: %v", err)
 	}
 
-	logger.Println("Order service stopped")
+	emitStructuredLog(
+		"INFO",
+		"Приложение остановлено",
+		map[string]any{
+			"event": "application_stopped",
+		},
+	)
 }
 
 // healthHandler проверяет работу приложения и доступность PostgreSQL.
@@ -568,9 +582,5 @@ func getEnv(name, defaultValue string) string {
 
 // loggingMiddleware пишет краткий журнал HTTP-запросов.
 func loggingMiddleware(logger *log.Logger, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		startedAt := time.Now()
-		next.ServeHTTP(w, r)
-		logger.Printf("%s %s выполнен за %s", r.Method, r.URL.Path, time.Since(startedAt))
-	})
+	return structuredLoggingMiddleware(logger, next)
 }

@@ -3,65 +3,126 @@ kind: Job
 metadata:
   name: order-service-migration
   labels:
-    app: order-service
+    app: order-service-migration
+    service: order-service
 spec:
   backoffLimit: 6
+
   template:
     metadata:
       labels:
         app: order-service-migration
+        service: order-service
+        component: migration
     spec:
       restartPolicy: OnFailure
+
       containers:
         - name: migration
           image: postgres:17-alpine
           imagePullPolicy: IfNotPresent
+
           command:
             - /bin/sh
             - -c
             - |
               set -eu
 
-              echo "Ожидание PostgreSQL ${DB_HOST}:${DB_PORT}..."
+              json_log()
+              {
+                LEVEL="$1"
+                EVENT="$2"
+                MESSAGE="$3"
+
+                printf \
+                  '{"timestamp":"%s","level":"%s","service":"order-service-migration","event":"%s","message":"%s"}\n' \
+                  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+                  "${LEVEL}" \
+                  "${EVENT}" \
+                  "${MESSAGE}"
+              }
+
+              json_log \
+                "INFO" \
+                "migration_started" \
+                "Запущен Job с миграциями базы данных"
+
+              ATTEMPT=1
 
               until PGPASSWORD="${DB_PASSWORD}" pg_isready \
                 -h "${DB_HOST}" \
                 -p "${DB_PORT}" \
                 -U "${DB_USERNAME}" \
-                -d "${DB_NAME}"
+                -d "${DB_NAME}" \
+                >/dev/null 2>&1
               do
+                json_log \
+                  "WARN" \
+                  "database_waiting" \
+                  "PostgreSQL пока недоступен, выполняется повторная попытка"
+
+                ATTEMPT=$((ATTEMPT + 1))
+
+                if [ "${ATTEMPT}" -gt 60 ]; then
+                  json_log \
+                    "ERROR" \
+                    "migration_failed" \
+                    "PostgreSQL не стал доступен за отведённое время"
+
+                  exit 1
+                fi
+
                 sleep 2
               done
 
-              echo "PostgreSQL доступен. Выполняем миграцию."
+              json_log \
+                "INFO" \
+                "database_ready" \
+                "PostgreSQL доступен для выполнения миграции"
 
-              PGPASSWORD="${DB_PASSWORD}" psql \
+              if PGPASSWORD="${DB_PASSWORD}" psql \
                 -v ON_ERROR_STOP=1 \
                 -h "${DB_HOST}" \
                 -p "${DB_PORT}" \
                 -U "${DB_USERNAME}" \
                 -d "${DB_NAME}" \
                 -f /migrations/001_create_users.sql
+              then
+                json_log \
+                  "INFO" \
+                  "migration_completed" \
+                  "Миграция базы данных успешно завершена"
+              else
+                json_log \
+                  "ERROR" \
+                  "migration_failed" \
+                  "Во время выполнения миграции произошла ошибка"
 
-              echo "Миграция успешно выполнена."
+                exit 1
+              fi
+
           envFrom:
             - configMapRef:
                 name: order-service-config
+
           env:
             - name: DB_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: order-service-db-secret
                   key: DB_USERNAME
+
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: order-service-db-secret
                   key: DB_PASSWORD
+
           volumeMounts:
             - name: migrations
               mountPath: /migrations
               readOnly: true
+
       volumes:
         - name: migrations
           configMap:
