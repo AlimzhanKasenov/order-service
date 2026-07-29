@@ -1,4 +1,3 @@
-cat > README.md <<'EOF'
 # Order Service
 
 Учебный RESTful CRUD-сервис пользователей на Go с PostgreSQL и развёртыванием в Kubernetes.
@@ -34,3 +33,20 @@ cat > README.md <<'EOF'
 
 ```bash
 docker compose up --build -d
+
+## Централизованное логирование
+
+В проекте настроен EFK-стек:
+
+- Elasticsearch;
+- Kibana;
+- Fluent Bit.
+
+Подробная инструкция по установке, проверке логов и работе с Kibana:
+
+[Открыть инструкцию по централизованному логированию](LOGGING.md)
+
+Скриншоты Kibana находятся в каталоге:
+
+`screenshots/kibana/`
+
