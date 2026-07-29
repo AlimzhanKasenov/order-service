@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: order-service
-          image: alimzhankassenov/order-service:2.0.0
+          image: order-service:2.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

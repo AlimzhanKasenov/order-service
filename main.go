@@ -90,6 +90,7 @@ func main() {
 	// Сохраняем оба адреса health-check из предыдущего домашнего задания.
 	mux.HandleFunc("GET /health", app.healthHandler)
 	mux.HandleFunc("GET /health/{$}", app.healthHandler)
+	registerMonitoringRoutes(mux, app)
 
 	// RESTful CRUD пользователей.
 	mux.HandleFunc("POST /user", app.createUserHandler)
@@ -101,7 +102,7 @@ func main() {
 	serverPort := getEnv("SERVER_PORT", defaultServerPort)
 	server := &http.Server{
 		Addr:              ":" + serverPort,
-		Handler:           loggingMiddleware(logger, mux),
+		Handler:           prometheusMiddleware(loggingMiddleware(logger, mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

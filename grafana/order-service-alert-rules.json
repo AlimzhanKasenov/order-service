@@ -1,0 +1,190 @@
+[
+  {
+    "id": 1,
+    "uid": "order-service-high-error-rate",
+    "orgID": 1,
+    "folderUID": "order-service-alerts",
+    "ruleGroup": "Order Service Monitoring",
+    "title": "Order Service — High Error Rate",
+    "condition": "B",
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
+        "datasourceUid": "prometheus",
+        "model": {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(order_service_http_requests_total{status=~\"5..\"}[1m]))",
+          "hide": false,
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "range": false,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
+        "datasourceUid": "-100",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [
+                  5
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "A"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              },
+              "type": "query"
+            }
+          ],
+          "datasource": {
+            "type": "__expr__",
+            "uid": "-100"
+          },
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "classic_conditions"
+        }
+      }
+    ],
+    "updated": "2026-07-29T09:48:32Z",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "30s",
+    "keep_firing_for": "0s",
+    "annotations": {
+      "description": "За последнюю минуту сервис вернул более 5 ответов с кодом 5xx.",
+      "summary": "В order-service обнаружено много ответов 5xx"
+    },
+    "labels": {
+      "environment": "minikube",
+      "service": "order-service",
+      "severity": "warning"
+    },
+    "isPaused": false,
+    "notification_settings": null,
+    "record": null
+  },
+  {
+    "id": 2,
+    "uid": "order-service-high-latency",
+    "orgID": 1,
+    "folderUID": "order-service-alerts",
+    "ruleGroup": "Order Service Monitoring",
+    "title": "Order Service — High p95 Latency",
+    "condition": "B",
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
+        "datasourceUid": "prometheus",
+        "model": {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(order_service_http_request_duration_seconds_bucket[1m])))",
+          "hide": false,
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "range": false,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
+        "datasourceUid": "-100",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [
+                  0.5
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "A"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              },
+              "type": "query"
+            }
+          ],
+          "datasource": {
+            "type": "__expr__",
+            "uid": "-100"
+          },
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "classic_conditions"
+        }
+      }
+    ],
+    "updated": "2026-07-29T09:48:32Z",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "30s",
+    "keep_firing_for": "0s",
+    "annotations": {
+      "description": "p95 времени ответа сервиса превысил 0.5 секунды.",
+      "summary": "p95 latency order-service выше 500 ms"
+    },
+    "labels": {
+      "environment": "minikube",
+      "service": "order-service",
+      "severity": "warning"
+    },
+    "isPaused": false,
+    "notification_settings": null,
+    "record": null
+  }
+]

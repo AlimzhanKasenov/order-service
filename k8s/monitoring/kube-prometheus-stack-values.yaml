@@ -1,0 +1,111 @@
+# Настройки kube-prometheus-stack для локального Minikube.
+
+# Alertmanager отключаем: алерты по заданию будем создавать
+# непосредственно в Grafana.
+alertmanager:
+  enabled: false
+
+# Стандартные PrometheusRule отключаем, чтобы снизить нагрузку
+# на локальный Minikube.
+defaultRules:
+  create: false
+
+grafana:
+  enabled: true
+
+  # Пароль не храним в Git — Grafana возьмёт его из Secret.
+  admin:
+    existingSecret: monitoring-grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+
+  defaultDashboardsTimezone: browser
+
+  persistence:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+prometheus:
+  enabled: true
+
+  prometheusSpec:
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    retention: 2d
+
+    # Разрешаем Prometheus находить наши ServiceMonitor
+    # во всех namespace независимо от Helm-меток.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelector: {}
+    podMonitorNamespaceSelector: {}
+
+    ruleSelectorNilUsesHelmValues: false
+    ruleSelector: {}
+    ruleNamespaceSelector: {}
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 100Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 150m
+      memory: 192Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# На локальном Minikube эти endpoint часто недоступны для Prometheus
+# или создают лишние ложные DOWN-targets.
+kubeEtcd:
+  enabled: false
+
+kubeControllerManager:
+  enabled: false
+
+kubeScheduler:
+  enabled: false
+
+kubeProxy:
+  enabled: false
+
+# Метрики потребления CPU и памяти контейнерами.
+kubelet:
+  enabled: true
+
+  serviceMonitor:
+    cAdvisor: true

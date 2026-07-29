@@ -1,0 +1,116 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-exporter
+  namespace: default
+  labels:
+    app: postgres-exporter
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: postgres-exporter
+
+  template:
+    metadata:
+      labels:
+        app: postgres-exporter
+
+    spec:
+      containers:
+        - name: postgres-exporter
+          image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+          imagePullPolicy: IfNotPresent
+
+          # Пользователю order_user не требуется доступ к содержимому WAL.
+          # Отключаем collector, использующий привилегированную pg_ls_waldir().
+          args:
+            - --no-collector.wal
+
+          ports:
+            - name: metrics
+              containerPort: 9187
+              protocol: TCP
+
+          env:
+            # Подключаемся к существующей базе users.
+            - name: DATA_SOURCE_URI
+              value: order-postgresql.default.svc.cluster.local:5432/users?sslmode=disable
+
+            - name: DATA_SOURCE_USER
+              value: order_user
+
+            - name: DATA_SOURCE_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: order-service-db-secret
+                  key: password
+
+            - name: PG_EXPORTER_COLLECTION_TIMEOUT
+              value: 10s
+
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 150m
+              memory: 128Mi
+
+          readinessProbe:
+            tcpSocket:
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            tcpSocket:
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-exporter
+  namespace: default
+  labels:
+    app: postgres-exporter
+spec:
+  type: ClusterIP
+
+  selector:
+    app: postgres-exporter
+
+  ports:
+    - name: metrics
+      port: 9187
+      targetPort: metrics
+      protocol: TCP
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: postgres-exporter
+  namespace: monitoring
+  labels:
+    app: postgres-exporter
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+
+  selector:
+    matchLabels:
+      app: postgres-exporter
+
+  endpoints:
+    - port: metrics
+      path: /metrics
+      scheme: http
+      interval: 15s
+      scrapeTimeout: 10s
