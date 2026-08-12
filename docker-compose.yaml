@@ -3,15 +3,22 @@ services:
     image: postgres:17-alpine
     container_name: order-service-postgres
     restart: unless-stopped
+
     environment:
       POSTGRES_DB: users
       POSTGRES_USER: order_user
       POSTGRES_PASSWORD: order_password
+
     ports:
       - "5432:5432"
+
     volumes:
       - order-service-postgres-data:/var/lib/postgresql/data
+
       - ./migrations/001_create_users.sql:/docker-entrypoint-initdb.d/001_create_users.sql:ro
+
+      - ./migrations/002_add_authentication.sql:/docker-entrypoint-initdb.d/002_add_authentication.sql:ro
+
     healthcheck:
       test:
         - CMD-SHELL
@@ -23,18 +30,30 @@ services:
   order-service:
     build:
       context: .
+
     container_name: order-service
     restart: unless-stopped
+
     environment:
       SERVER_PORT: "8000"
+
+      SERVICE_NAME: order-service
+      LOG_LEVEL: INFO
+
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: users
       DB_SSLMODE: disable
       DB_USERNAME: order_user
       DB_PASSWORD: order_password
+
+      JWT_SECRET: local-development-jwt-secret-change-me-123456789
+      JWT_ISSUER: order-service
+      JWT_TTL: 1h
+
     ports:
       - "8000:8000"
+
     depends_on:
       postgres:
         condition: service_healthy

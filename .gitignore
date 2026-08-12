@@ -1,7 +1,13 @@
 .idea/
 .vscode/
+
 .env
+.env.*
+
 order-service
 order-service.exe
+
 *.log
 *.out
+
+newman/*.txt

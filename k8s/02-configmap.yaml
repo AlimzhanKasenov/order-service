@@ -12,3 +12,6 @@ data:
   DB_PORT: "5432"
   DB_NAME: users
   DB_SSLMODE: disable
+
+  JWT_ISSUER: order-service
+  JWT_TTL: 1h

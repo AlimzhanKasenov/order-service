@@ -6,12 +6,19 @@ data:
   001_create_users.sql: |
     CREATE TABLE IF NOT EXISTS users
     (
-        id         BIGSERIAL PRIMARY KEY,
-        username   VARCHAR(256)             NOT NULL UNIQUE,
-        first_name VARCHAR(255)             NOT NULL,
-        last_name  VARCHAR(255)             NOT NULL,
-        email      VARCHAR(255)             NOT NULL UNIQUE,
-        phone      VARCHAR(50)              NOT NULL DEFAULT '',
-        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                 );
+        id            BIGSERIAL PRIMARY KEY,
+        username      VARCHAR(256)             NOT NULL UNIQUE,
+        first_name    VARCHAR(255)             NOT NULL,
+        last_name     VARCHAR(255)             NOT NULL,
+        email         VARCHAR(255)             NOT NULL UNIQUE,
+        phone         VARCHAR(50)              NOT NULL DEFAULT '',
+        created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+  002_add_authentication.sql: |
+    ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS password_hash VARCHAR(100);
+
+    COMMENT ON COLUMN users.password_hash IS
+        'BCrypt password hash. Nullable only for users created before authentication was introduced.';

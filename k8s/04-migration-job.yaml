@@ -5,6 +5,7 @@ metadata:
   labels:
     app: order-service-migration
     service: order-service
+
 spec:
   backoffLimit: 6
 
@@ -14,6 +15,7 @@ spec:
         app: order-service-migration
         service: order-service
         component: migration
+
     spec:
       restartPolicy: OnFailure
 
@@ -78,28 +80,43 @@ spec:
               json_log \
                 "INFO" \
                 "database_ready" \
-                "PostgreSQL доступен для выполнения миграции"
+                "PostgreSQL доступен для выполнения миграций"
 
-              if PGPASSWORD="${DB_PASSWORD}" psql \
-                -v ON_ERROR_STOP=1 \
-                -h "${DB_HOST}" \
-                -p "${DB_PORT}" \
-                -U "${DB_USERNAME}" \
-                -d "${DB_NAME}" \
-                -f /migrations/001_create_users.sql
-              then
+              for migration_file in \
+                /migrations/001_create_users.sql \
+                /migrations/002_add_authentication.sql
+              do
                 json_log \
                   "INFO" \
-                  "migration_completed" \
-                  "Миграция базы данных успешно завершена"
-              else
-                json_log \
-                  "ERROR" \
-                  "migration_failed" \
-                  "Во время выполнения миграции произошла ошибка"
+                  "migration_file_started" \
+                  "Запущен файл ${migration_file}"
 
-                exit 1
-              fi
+                if PGPASSWORD="${DB_PASSWORD}" psql \
+                  -v ON_ERROR_STOP=1 \
+                  -h "${DB_HOST}" \
+                  -p "${DB_PORT}" \
+                  -U "${DB_USERNAME}" \
+                  -d "${DB_NAME}" \
+                  -f "${migration_file}"
+                then
+                  json_log \
+                    "INFO" \
+                    "migration_file_completed" \
+                    "Файл ${migration_file} выполнен успешно"
+                else
+                  json_log \
+                    "ERROR" \
+                    "migration_failed" \
+                    "Ошибка выполнения файла ${migration_file}"
+
+                  exit 1
+                fi
+              done
+
+              json_log \
+                "INFO" \
+                "migration_completed" \
+                "Все миграции базы данных успешно завершены"
 
           envFrom:
             - configMapRef:
