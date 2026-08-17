@@ -1,0 +1,239 @@
+newman
+
+Order Service - Authentication and BFF
+
+→ 01 - Register user 1
+  POST http://arch.homework:8080/register [201 Created, 348B, 1210ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'POST http://arch.homework:8080/register'
+  │ '{\n' +
+  │   '  "username": "user1_1786513285084613001",\n' +
+  │   '  "password": "Password1_1786513285084613001_A!",\n
+  │ ' +
+  │   '  "firstName": "UserOne",\n' +
+  │   '  "lastName": "Initial",\n' +
+  │   '  "email": "user1_1786513285084613001@example.com",
+  │ \n' +
+  │   '  "phone": "+77010000001"\n' +
+  │   '}'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 201'
+  │ '{"id":7,"username":"user1_1786513285084613001","first
+  │ Name":"UserOne","lastName":"Initial","email":"user1_17
+  │ 86513285084613001@example.com","phone":"+77010000001"}
+  │ \n'
+  │ '========================================='
+  └
+  ✓  User 1 registration returns 201
+  ✓  Registered username is correct
+
+→ 02 - Get user 1 profile without login
+  GET http://arch.homework:8080/profile/7 [401 Unauthorized, 242B, 14ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'GET http://arch.homework:8080/profile/7'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 401'
+  │ '{"code":401,"message":"authentication is required"}\n
+  │ '
+  │ '========================================='
+  └
+  ✓  Anonymous profile read returns 401
+
+→ 03 - Update user 1 profile without login
+  PUT http://arch.homework:8080/profile/7 [401 Unauthorized, 242B, 10ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'PUT http://arch.homework:8080/profile/7'
+  │ '{\n' +
+  │   '  "firstName": "Anonymous",\n' +
+  │   '  "lastName": "UpdateMustFail",\n' +
+  │   '  "email": "anonymous_1786513285084613001@example.c
+  │ om",\n' +
+  │   '  "phone": "+77019999999"\n' +
+  │   '}'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 401'
+  │ '{"code":401,"message":"authentication is required"}\n
+  │ '
+  │ '========================================='
+  └
+  ✓  Anonymous profile update returns 401
+
+→ 04 - Login user 1
+  POST http://arch.homework:8080/login [200 OK, 549B, 1017ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'POST http://arch.homework:8080/login'
+  │ '{\n' +
+  │   '  "username": "user1_1786513285084613001",\n' +
+  │   '  "password": "Password1_1786513285084613001_A!"\n'
+  │  +
+  │   '}'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 200'
+  │ '{"tokenType":"Bearer","accessToken":"eyJhbGciOiJIUzI1
+  │ NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6InVzZXIxXzE3ODY1M
+  │ TMyODUwODQ2MTMwMDEiLCJpc3MiOiJvcmRlci1zZXJ2aWNlIiwic3V
+  │ iIjoiNyIsImV4cCI6MTc4NjUxNjg4NywibmJmIjoxNzg2NTEzMjg3L
+  │ CJpYXQiOjE3ODY1MTMyODcsImp0aSI6Ijc3MmI2NzIxZjY0YWVmMGQ
+  │ zOGFhNzdkYTJlZDYyZGNhIn0.IwbKo0bHkIib5LG1AbwEk7kYgye15
+  │ rAToC3a81_X040","expiresIn":3600,"userId":7}\n'
+  │ '========================================='
+  └
+  ✓  User 1 login returns 200
+  ✓  Login user ID matches registered user
+
+→ 05 - Update user 1 profile
+  PUT http://arch.homework:8080/profile/7 [200 OK, 365B, 18ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'PUT http://arch.homework:8080/profile/7'
+  │ '{\n' +
+  │   '  "firstName": "UserOneUpdated",\n' +
+  │   '  "lastName": "ProfileChanged",\n' +
+  │   '  "email": "user1_updated_1786513285084613001@examp
+  │ le.com",\n' +
+  │   '  "phone": "+77011112233"\n' +
+  │   '}'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 200'
+  │ '{"id":7,"username":"user1_1786513285084613001","first
+  │ Name":"UserOneUpdated","lastName":"ProfileChanged","em
+  │ ail":"user1_updated_1786513285084613001@example.com","
+  │ phone":"+77011112233"}\n'
+  │ '========================================='
+  └
+  ✓  User 1 profile update returns 200
+  ✓  Profile contains updated first name
+  ✓  Profile contains updated last name
+  ✓  Profile contains updated email
+
+→ 06 - Verify user 1 profile changed
+  GET http://arch.homework:8080/profile/7 [200 OK, 365B, 14ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'GET http://arch.homework:8080/profile/7'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 200'
+  │ '{"id":7,"username":"user1_1786513285084613001","first
+  │ Name":"UserOneUpdated","lastName":"ProfileChanged","em
+  │ ail":"user1_updated_1786513285084613001@example.com","
+  │ phone":"+77011112233"}\n'
+  │ '========================================='
+  └
+  ✓  User 1 profile read returns 200
+  ✓  Profile ID belongs to user 1
+  ✓  Changed profile values are saved
+
+→ 07 - Register user 2
+  POST http://arch.homework:8080/register [201 Created, 348B, 923ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'POST http://arch.homework:8080/register'
+  │ '{\n' +
+  │   '  "username": "user2_1786513285084613001",\n' +
+  │   '  "password": "Password2_1786513285084613001_B!",\n
+  │ ' +
+  │   '  "firstName": "UserTwo",\n' +
+  │   '  "lastName": "Initial",\n' +
+  │   '  "email": "user2_1786513285084613001@example.com",
+  │ \n' +
+  │   '  "phone": "+77020000002"\n' +
+  │   '}'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 201'
+  │ '{"id":8,"username":"user2_1786513285084613001","first
+  │ Name":"UserTwo","lastName":"Initial","email":"user2_17
+  │ 86513285084613001@example.com","phone":"+77020000002"}
+  │ \n'
+  │ '========================================='
+  └
+  ✓  User 2 registration returns 201
+
+→ 08 - Login user 2
+  POST http://arch.homework:8080/login [200 OK, 549B, 777ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'POST http://arch.homework:8080/login'
+  │ '{\n' +
+  │   '  "username": "user2_1786513285084613001",\n' +
+  │   '  "password": "Password2_1786513285084613001_B!"\n'
+  │  +
+  │   '}'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 200'
+  │ '{"tokenType":"Bearer","accessToken":"eyJhbGciOiJIUzI1
+  │ NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6InVzZXIyXzE3ODY1M
+  │ TMyODUwODQ2MTMwMDEiLCJpc3MiOiJvcmRlci1zZXJ2aWNlIiwic3V
+  │ iIjoiOCIsImV4cCI6MTc4NjUxNjg4OSwibmJmIjoxNzg2NTEzMjg5L
+  │ CJpYXQiOjE3ODY1MTMyODksImp0aSI6IjViMGNiNGI5NmUwYjM3ZjQ
+  │ 0OTE4NzlhOTkwODllZDkwIn0.QzUgIn2bftyreDkIx-fYkZi7apuHq
+  │ WJd15a46jHfPgQ","expiresIn":3600,"userId":8}\n'
+  │ '========================================='
+  └
+  ✓  User 2 login returns 200
+
+→ 09 - User 2 cannot read user 1 profile
+  GET http://arch.homework:8080/profile/7 [403 Forbidden, 258B, 8ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'GET http://arch.homework:8080/profile/7'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 403'
+  │ `{"code":403,"message":"access to another user's profi
+  │ le is forbidden"}\n`
+  │ '========================================='
+  └
+  ✓  User 2 profile read attempt returns 403
+
+→ 10 - User 2 cannot update user 1 profile
+  PUT http://arch.homework:8080/profile/7 [403 Forbidden, 258B, 8ms]
+  ┌
+  │ ''
+  │ '================ REQUEST ================'
+  │ 'PUT http://arch.homework:8080/profile/7'
+  │ '{\n' +
+  │   '  "firstName": "Hacked",\n' +
+  │   '  "lastName": "MustNotBeSaved",\n' +
+  │   '  "email": "hacked_1786513285084613001@example.com"
+  │ ,\n' +
+  │   '  "phone": "+77029999999"\n' +
+  │   '}'
+  │ '================ RESPONSE ==============='
+  │ 'HTTP 403'
+  │ `{"code":403,"message":"access to another user's profi
+  │ le is forbidden"}\n`
+  │ '========================================='
+  └
+  ✓  User 2 profile update attempt returns 403
+
+┌─────────────────────────┬────────────────────┬────────────────────┐
+│                         │           executed │             failed │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│              iterations │                  1 │                  0 │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│                requests │                 10 │                  0 │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│            test-scripts │                 20 │                  0 │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│      prerequest-scripts │                 10 │                  0 │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│              assertions │                 17 │                  0 │
+├─────────────────────────┴────────────────────┴────────────────────┤
+│ total run duration: 4.4s                                          │
+├───────────────────────────────────────────────────────────────────┤
+│ total data received: 1.67kB (approx)                              │
+├───────────────────────────────────────────────────────────────────┤
+│ average response time: 399ms [min: 8ms, max: 1210ms, s.d.: 485ms] │
+└───────────────────────────────────────────────────────────────────┘

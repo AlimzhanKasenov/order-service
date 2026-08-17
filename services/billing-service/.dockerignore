@@ -1,0 +1,4 @@
+billing-service
+*.log
+.git
+.idea

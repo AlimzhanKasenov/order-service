@@ -95,6 +95,19 @@ func main() {
 		jwtTTL:    jwtTTL,
 	}
 
+	kafkaContext, cancelKafka := context.WithCancel(
+		context.Background(),
+	)
+	defer cancelKafka()
+
+	go app.consumePaymentSucceededEvents(
+		kafkaContext,
+	)
+
+	go app.consumePaymentFailedEvents(
+		kafkaContext,
+	)
+
 	mux := http.NewServeMux()
 
 	// Health-check из предыдущих домашних заданий.
@@ -123,6 +136,18 @@ func main() {
 	mux.HandleFunc(
 		"POST /login",
 		app.loginHandler,
+	)
+
+	// Создание заказа.
+	mux.HandleFunc(
+		"POST /orders",
+		app.createOrderHandler,
+	)
+
+	// Получение заказа.
+	mux.HandleFunc(
+		"GET /orders/{orderId}",
+		app.getOrderHandler,
 	)
 
 	// Защищённое чтение собственного профиля.

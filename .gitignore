@@ -11,3 +11,6 @@ order-service.exe
 *.out
 
 newman/*.txt
+# Local service binaries
+services/billing-service/billing-service
+services/notification-service/notification-service

@@ -49,8 +49,9 @@ type LoginResponse struct {
 
 // registerHandler регистрирует нового пользователя.
 //
-// Пароль никогда не сохраняется в открытом виде.
-// В PostgreSQL записывается только BCrypt-хеш.
+// После создания пользователя публикуется Kafka-событие
+// user.created. Billing Service получает это событие
+// и автоматически создаёт счёт пользователя.
 func (app *Application) registerHandler(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -173,6 +174,26 @@ func (app *Application) registerHandler(
 		return
 	}
 
+	// После создания пользователя отправляем событие
+	// в Kafka для Billing Service.
+	if err := publishUserCreatedEvent(
+		r.Context(),
+		user,
+	); err != nil {
+		app.logger.Printf(
+			"Ошибка публикации user.created для пользователя ID %d: %v",
+			user.ID,
+			err,
+		)
+
+		writeError(
+			w,
+			http.StatusInternalServerError,
+			"failed to publish user created event",
+		)
+		return
+	}
+
 	emitStructuredLog(
 		"INFO",
 		"Пользователь зарегистрирован",
@@ -180,6 +201,16 @@ func (app *Application) registerHandler(
 			"event":    "user_registered",
 			"user_id":  user.ID,
 			"username": user.Username,
+		},
+	)
+
+	emitStructuredLog(
+		"INFO",
+		"Событие user.created опубликовано",
+		map[string]any{
+			"event":   "user_created_published",
+			"user_id": user.ID,
+			"topic":   userCreatedTopic,
 		},
 	)
 
@@ -265,9 +296,6 @@ func (app *Application) loginHandler(
 		return
 	}
 
-	// У старых пользователей из CRUD-ДЗ password_hash может быть NULL.
-	// Такие пользователи не могут войти, пока не зарегистрированы
-	// через новый сценарий аутентификации.
 	if !passwordHash.Valid ||
 		strings.TrimSpace(passwordHash.String) == "" {
 		writeInvalidCredentials(w)
@@ -324,10 +352,6 @@ func (app *Application) loginHandler(
 }
 
 // createAccessToken создаёт подписанный JWT.
-//
-// sub содержит ID пользователя.
-// exp ограничивает время жизни токена.
-// iss позволяет проверять, каким сервисом токен был создан.
 func (app *Application) createAccessToken(
 	user User,
 ) (string, int64, error) {
@@ -374,8 +398,6 @@ func (app *Application) createAccessToken(
 }
 
 // validatePassword проверяет ограничения BCrypt.
-//
-// BCrypt принимает пароль длиной не более 72 байт.
 func validatePassword(
 	password string,
 ) error {
@@ -411,11 +433,8 @@ func newTokenID() (string, error) {
 	return hex.EncodeToString(randomBytes), nil
 }
 
-// writeInvalidCredentials намеренно возвращает одинаковую ошибку
+// writeInvalidCredentials возвращает одинаковую ошибку
 // для неизвестного логина и неправильного пароля.
-//
-// Благодаря этому нельзя определить,
-// существует пользователь или нет.
 func writeInvalidCredentials(
 	w http.ResponseWriter,
 ) {
@@ -426,8 +445,7 @@ func writeInvalidCredentials(
 	)
 }
 
-// contextWithDatabaseTimeout создаёт контекст запроса к PostgreSQL
-// с уже используемым в проекте ограничением времени.
+// contextWithDatabaseTimeout создаёт контекст запроса к PostgreSQL.
 func contextWithDatabaseTimeout(
 	r *http.Request,
 ) (

@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-postgres-init
+  namespace: stream-processing
+data:
+  001_create_users.sql: |
+    CREATE TABLE IF NOT EXISTS users
+    (
+        id BIGSERIAL PRIMARY KEY,
+        username VARCHAR(100) NOT NULL UNIQUE,
+        first_name VARCHAR(100) NOT NULL,
+        last_name VARCHAR(100) NOT NULL,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        phone VARCHAR(50) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+  002_add_authentication.sql: |
+    ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS password_hash VARCHAR(100);
+
+  003_create_orders.sql: |
+    CREATE TABLE IF NOT EXISTS orders
+    (
+        id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        price BIGINT NOT NULL CHECK (price > 0),
+        status VARCHAR(30) NOT NULL DEFAULT 'NEW',
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+        CONSTRAINT orders_user_fk
+            FOREIGN KEY (user_id)
+            REFERENCES users(id)
+            ON DELETE CASCADE,
+
+        CONSTRAINT orders_status_check
+            CHECK (status IN ('NEW', 'PAID', 'PAYMENT_FAILED'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_orders_user_id
+        ON orders(user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_orders_status
+        ON orders(status);
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-postgres
+  namespace: stream-processing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-postgres
+  template:
+    metadata:
+      labels:
+        app: order-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+
+          env:
+            - name: POSTGRES_DB
+              value: users
+
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: stream-processing-secrets
+                  key: ORDER_DB_USERNAME
+
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: stream-processing-secrets
+                  key: ORDER_DB_PASSWORD
+
+          ports:
+            - containerPort: 5432
+
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U order_user -d users
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U order_user -d users
+            initialDelaySeconds: 15
+            periodSeconds: 10
+
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: order-postgres-init
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-postgres
+  namespace: stream-processing
+spec:
+  selector:
+    app: order-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
