@@ -1,0 +1,226 @@
+asyncapi: '2.6.0'
+
+info:
+  title: Stream Processing Kafka Events
+  version: '1.0.0'
+  description: |
+    IDL событийного взаимодействия микросервисов
+    Order Service, Billing Service и Notification Service.
+
+servers:
+  kafka:
+    url: kafka:29092
+    protocol: kafka
+    description: Apache Kafka внутри Kubernetes
+
+channels:
+
+  user.created:
+    description: Событие регистрации пользователя
+    publish:
+      operationId: publishUserCreated
+      message:
+        $ref: '#/components/messages/UserCreated'
+    subscribe:
+      operationId: consumeUserCreated
+      message:
+        $ref: '#/components/messages/UserCreated'
+
+  order.created:
+    description: Событие создания заказа
+    publish:
+      operationId: publishOrderCreated
+      message:
+        $ref: '#/components/messages/OrderCreated'
+    subscribe:
+      operationId: consumeOrderCreated
+      message:
+        $ref: '#/components/messages/OrderCreated'
+
+  payment.succeeded:
+    description: Успешная оплата заказа
+    publish:
+      operationId: publishPaymentSucceeded
+      message:
+        $ref: '#/components/messages/PaymentSucceeded'
+    subscribe:
+      operationId: consumePaymentSucceeded
+      message:
+        $ref: '#/components/messages/PaymentSucceeded'
+
+  payment.failed:
+    description: Неуспешная оплата заказа
+    publish:
+      operationId: publishPaymentFailed
+      message:
+        $ref: '#/components/messages/PaymentFailed'
+    subscribe:
+      operationId: consumePaymentFailed
+      message:
+        $ref: '#/components/messages/PaymentFailed'
+
+components:
+
+  messages:
+
+    UserCreated:
+      name: UserCreated
+      title: Пользователь создан
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/UserCreatedEvent'
+
+    OrderCreated:
+      name: OrderCreated
+      title: Заказ создан
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/OrderCreatedEvent'
+
+    PaymentSucceeded:
+      name: PaymentSucceeded
+      title: Оплата выполнена успешно
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/PaymentSucceededEvent'
+
+    PaymentFailed:
+      name: PaymentFailed
+      title: Оплата не выполнена
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/PaymentFailedEvent'
+
+  schemas:
+
+    UserCreatedEvent:
+      type: object
+      required:
+        - userId
+        - username
+        - email
+        - createdAt
+      properties:
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        username:
+          type: string
+          example: stream-user
+        email:
+          type: string
+          format: email
+          example: stream@example.com
+        createdAt:
+          type: string
+          format: date-time
+
+    OrderCreatedEvent:
+      type: object
+      required:
+        - orderId
+        - userId
+        - price
+        - email
+        - createdAt
+      properties:
+        orderId:
+          type: integer
+          format: int64
+          example: 1
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        price:
+          type: integer
+          format: int64
+          example: 3000
+        email:
+          type: string
+          format: email
+          example: stream@example.com
+        createdAt:
+          type: string
+          format: date-time
+
+    PaymentSucceededEvent:
+      type: object
+      required:
+        - orderId
+        - userId
+        - price
+        - email
+        - balance
+        - status
+        - processedAt
+      properties:
+        orderId:
+          type: integer
+          format: int64
+          example: 1
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        price:
+          type: integer
+          format: int64
+          example: 3000
+        email:
+          type: string
+          format: email
+          example: stream@example.com
+        balance:
+          type: integer
+          format: int64
+          example: 7000
+        status:
+          type: string
+          enum:
+            - SUCCESS
+          example: SUCCESS
+        processedAt:
+          type: string
+          format: date-time
+
+    PaymentFailedEvent:
+      type: object
+      required:
+        - orderId
+        - userId
+        - price
+        - email
+        - balance
+        - status
+        - processedAt
+      properties:
+        orderId:
+          type: integer
+          format: int64
+          example: 2
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        price:
+          type: integer
+          format: int64
+          example: 20000
+        email:
+          type: string
+          format: email
+          example: stream@example.com
+        balance:
+          type: integer
+          format: int64
+          example: 7000
+        status:
+          type: string
+          enum:
+            - FAILED
+          example: FAILED
+        processedAt:
+          type: string
+          format: date-time

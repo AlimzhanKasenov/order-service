@@ -1,0 +1,415 @@
+openapi: 3.0.3
+
+info:
+  title: Stream Processing Homework API
+  version: 1.0.0
+  description: |
+    HTTP API микросервисного приложения Order Service,
+    Billing Service и Notification Service.
+
+servers:
+  - url: http://arch.homework
+    description: Kubernetes Ingress
+
+paths:
+
+  /register:
+    post:
+      tags:
+        - Order Service
+      summary: Регистрация пользователя
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Пользователь создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Ошибка валидации
+
+  /orders:
+    post:
+      tags:
+        - Order Service
+      summary: Создание заказа
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '201':
+          description: Заказ создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          description: Ошибка запроса
+        '404':
+          description: Пользователь не найден
+
+  /orders/{orderId}:
+    get:
+      tags:
+        - Order Service
+      summary: Получить заказ
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Заказ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          description: Заказ не найден
+
+  /billing/accounts/{userId}:
+    get:
+      tags:
+        - Billing Service
+      summary: Получить счёт пользователя
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Счёт пользователя
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          description: Счёт не найден
+
+  /billing/accounts/{userId}/deposit:
+    post:
+      tags:
+        - Billing Service
+      summary: Пополнить счёт пользователя
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AmountRequest'
+      responses:
+        '200':
+          description: Счёт пополнен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: Некорректная сумма
+        '404':
+          description: Счёт не найден
+
+  /billing/accounts/{userId}/withdraw:
+    post:
+      tags:
+        - Billing Service
+      summary: Списать средства со счёта
+      description: |
+        HTTP операция списания используется также для демонстрации
+        синхронного варианта архитектуры.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AmountRequest'
+      responses:
+        '200':
+          description: Средства списаны
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          description: Счёт не найден
+        '409':
+          description: Недостаточно средств
+
+  /notifications/{userId}:
+    get:
+      tags:
+        - Notification Service
+      summary: Получить уведомления пользователя
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Список уведомлений
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+
+  /notifications:
+    post:
+      tags:
+        - Notification Service
+      summary: Создать уведомление
+      description: |
+        HTTP endpoint может использоваться в синхронном варианте
+        архитектуры. Практическая реализация Event Collaboration
+        создаёт уведомления после Kafka-событий.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateNotificationRequest'
+      responses:
+        '201':
+          description: Уведомление создано
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+
+components:
+
+  schemas:
+
+    RegisterRequest:
+      type: object
+      required:
+        - username
+        - password
+        - firstName
+        - lastName
+        - email
+        - phone
+      properties:
+        username:
+          type: string
+          example: stream-user
+        password:
+          type: string
+          format: password
+          example: Password12345
+        firstName:
+          type: string
+          example: Stream
+        lastName:
+          type: string
+          example: Test
+        email:
+          type: string
+          format: email
+          example: stream@example.com
+        phone:
+          type: string
+          example: "+77000000001"
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        username:
+          type: string
+          example: stream-user
+        firstName:
+          type: string
+          example: Stream
+        lastName:
+          type: string
+          example: Test
+        email:
+          type: string
+          format: email
+          example: stream@example.com
+        phone:
+          type: string
+          example: "+77000000001"
+
+    CreateOrderRequest:
+      type: object
+      required:
+        - userId
+        - price
+      properties:
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        price:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 3000
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        price:
+          type: integer
+          format: int64
+          example: 3000
+        status:
+          type: string
+          enum:
+            - NEW
+            - PAID
+            - PAYMENT_FAILED
+          example: PAID
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AmountRequest:
+      type: object
+      required:
+        - amount
+      properties:
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 10000
+
+    Account:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        balance:
+          type: integer
+          format: int64
+          example: 7000
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateNotificationRequest:
+      type: object
+      required:
+        - userId
+        - orderId
+        - email
+        - subject
+        - message
+        - status
+      properties:
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        orderId:
+          type: integer
+          format: int64
+          example: 1
+        email:
+          type: string
+          format: email
+          example: stream@example.com
+        subject:
+          type: string
+          example: Заказ успешно оплачен
+        message:
+          type: string
+          example: Ваш заказ успешно оплачен.
+        status:
+          type: string
+          enum:
+            - SUCCESS
+            - FAILED
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        userId:
+          type: integer
+          format: int64
+          example: 1
+        orderId:
+          type: integer
+          format: int64
+          example: 1
+        email:
+          type: string
+          format: email
+          example: stream@example.com
+        subject:
+          type: string
+          example: Заказ успешно оплачен
+        message:
+          type: string
+          example: Ваш заказ успешно оплачен.
+        status:
+          type: string
+          enum:
+            - SUCCESS
+            - FAILED
+        createdAt:
+          type: string
+          format: date-time
