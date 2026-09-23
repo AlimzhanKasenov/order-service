@@ -21,6 +21,7 @@ services:
       - ./migrations/001_create_users.sql:/docker-entrypoint-initdb.d/001_create_users.sql:ro
       - ./migrations/002_add_authentication.sql:/docker-entrypoint-initdb.d/002_add_authentication.sql:ro
       - ./migrations/003_create_orders.sql:/docker-entrypoint-initdb.d/003_create_orders.sql:ro
+      - ./migrations/004_add_saga_fields.sql:/docker-entrypoint-initdb.d/004_add_saga_fields.sql:ro
 
     healthcheck:
       test:
@@ -60,12 +61,31 @@ services:
 
       KAFKA_BROKER: kafka:29092
 
+      BILLING_SERVICE_URL: http://billing-service:8001
+      INVENTORY_SERVICE_URL: http://inventory-service:8003
+      DELIVERY_SERVICE_URL: http://delivery-service:8004
+
     ports:
       - "8000:8000"
 
     depends_on:
       postgres:
         condition: service_healthy
+
+      kafka:
+        condition: service_healthy
+
+      kafka-init:
+        condition: service_completed_successfully
+
+      billing-service:
+        condition: service_started
+
+      inventory-service:
+        condition: service_started
+
+      delivery-service:
+        condition: service_started
 
 
   # ============================================================
@@ -126,6 +146,12 @@ services:
       billing-postgres:
         condition: service_healthy
 
+      kafka:
+        condition: service_healthy
+
+      kafka-init:
+        condition: service_completed_successfully
+
 
   # ============================================================
   # Notification Service PostgreSQL
@@ -185,6 +211,125 @@ services:
       notification-postgres:
         condition: service_healthy
 
+      kafka:
+        condition: service_healthy
+
+      kafka-init:
+        condition: service_completed_successfully
+
+
+  # ============================================================
+  # Inventory Service PostgreSQL
+  # ============================================================
+  inventory-postgres:
+    image: postgres:17-alpine
+    container_name: inventory-service-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: inventory
+      POSTGRES_USER: inventory_user
+      POSTGRES_PASSWORD: inventory_password
+
+    ports:
+      - "5435:5432"
+
+    volumes:
+      - inventory-service-postgres-data:/var/lib/postgresql/data
+      - ./services/inventory-service/migrations/001_create_inventory.sql:/docker-entrypoint-initdb.d/001_create_inventory.sql:ro
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U inventory_user -d inventory
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+
+  # ============================================================
+  # Inventory Service
+  # ============================================================
+  inventory-service:
+    build:
+      context: ./services/inventory-service
+
+    container_name: inventory-service
+    restart: unless-stopped
+
+    environment:
+      SERVER_PORT: "8003"
+
+      DB_HOST: inventory-postgres
+      DB_PORT: "5432"
+      DB_NAME: inventory
+      DB_SSLMODE: disable
+      DB_USERNAME: inventory_user
+      DB_PASSWORD: inventory_password
+
+    ports:
+      - "8003:8003"
+
+    depends_on:
+      inventory-postgres:
+        condition: service_healthy
+
+
+  # ============================================================
+  # Delivery Service PostgreSQL
+  # ============================================================
+  delivery-postgres:
+    image: postgres:17-alpine
+    container_name: delivery-service-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: delivery
+      POSTGRES_USER: delivery_user
+      POSTGRES_PASSWORD: delivery_password
+
+    ports:
+      - "5436:5432"
+
+    volumes:
+      - delivery-service-postgres-data:/var/lib/postgresql/data
+      - ./services/delivery-service/migrations/001_create_delivery.sql:/docker-entrypoint-initdb.d/001_create_delivery.sql:ro
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U delivery_user -d delivery
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+
+  # ============================================================
+  # Delivery Service
+  # ============================================================
+  delivery-service:
+    build:
+      context: ./services/delivery-service
+
+    container_name: delivery-service
+    restart: unless-stopped
+
+    environment:
+      SERVER_PORT: "8004"
+
+      DB_HOST: delivery-postgres
+      DB_PORT: "5432"
+      DB_NAME: delivery
+      DB_SSLMODE: disable
+      DB_USERNAME: delivery_user
+      DB_PASSWORD: delivery_password
+
+    ports:
+      - "8004:8004"
+
+    depends_on:
+      delivery-postgres:
+        condition: service_healthy
 
 
   # ============================================================
@@ -204,6 +349,7 @@ services:
 
       KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:29093,PLAINTEXT_HOST://:9092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
 
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
@@ -215,11 +361,76 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
 
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
-
       KAFKA_NUM_PARTITIONS: "1"
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+
+  # ============================================================
+  # Kafka Topics Initializer
+  # ============================================================
+  kafka-init:
+    image: apache/kafka:4.1.2
+    container_name: kafka-init
+
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+    entrypoint:
+      - /bin/sh
+      - -c
+
+    command: |
+      echo "Создание Kafka topics..."
+
+      /opt/kafka/bin/kafka-topics.sh \
+        --bootstrap-server kafka:29092 \
+        --create \
+        --if-not-exists \
+        --topic user.created \
+        --partitions 1 \
+        --replication-factor 1
+
+      /opt/kafka/bin/kafka-topics.sh \
+        --bootstrap-server kafka:29092 \
+        --create \
+        --if-not-exists \
+        --topic order.created \
+        --partitions 1 \
+        --replication-factor 1
+
+      /opt/kafka/bin/kafka-topics.sh \
+        --bootstrap-server kafka:29092 \
+        --create \
+        --if-not-exists \
+        --topic payment.succeeded \
+        --partitions 1 \
+        --replication-factor 1
+
+      /opt/kafka/bin/kafka-topics.sh \
+        --bootstrap-server kafka:29092 \
+        --create \
+        --if-not-exists \
+        --topic payment.failed \
+        --partitions 1 \
+        --replication-factor 1
+
+      echo "Kafka topics созданы."
+
+    restart: "no"
 
 
 volumes:
   order-service-postgres-data:
   billing-service-postgres-data:
   notification-service-postgres-data:
+  inventory-service-postgres-data:
+  delivery-service-postgres-data:

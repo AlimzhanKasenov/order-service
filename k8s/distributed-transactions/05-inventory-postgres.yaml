@@ -1,0 +1,167 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inventory-postgres-init
+  namespace: distributed-transactions
+data:
+  001_create_inventory.sql: |
+    CREATE TABLE IF NOT EXISTS inventory_products
+    (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        available_quantity BIGINT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+        CONSTRAINT inventory_products_available_quantity_check
+            CHECK (available_quantity >= 0)
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory_reservations
+    (
+        id BIGSERIAL PRIMARY KEY,
+        order_id BIGINT NOT NULL UNIQUE,
+        product_id BIGINT NOT NULL,
+        quantity BIGINT NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'RESERVED',
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+        CONSTRAINT inventory_reservations_product_fk
+            FOREIGN KEY (product_id)
+            REFERENCES inventory_products (id),
+
+        CONSTRAINT inventory_reservations_order_id_check
+            CHECK (order_id > 0),
+
+        CONSTRAINT inventory_reservations_quantity_check
+            CHECK (quantity > 0),
+
+        CONSTRAINT inventory_reservations_status_check
+            CHECK (
+                status IN (
+                    'RESERVED',
+                    'RELEASED'
+                )
+            )
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_inventory_reservations_product_id
+        ON inventory_reservations (product_id);
+
+    CREATE INDEX IF NOT EXISTS idx_inventory_reservations_status
+        ON inventory_reservations (status);
+
+    INSERT INTO inventory_products
+    (
+        id,
+        name,
+        available_quantity
+    )
+    VALUES
+        (
+            1,
+            'Учебный товар',
+            10
+        ),
+        (
+            2,
+            'Товар без остатка',
+            0
+        )
+    ON CONFLICT (id) DO NOTHING;
+
+    SELECT setval(
+        pg_get_serial_sequence(
+            'inventory_products',
+            'id'
+        ),
+        GREATEST(
+            (
+                SELECT COALESCE(
+                    MAX(id),
+                    1
+                )
+                FROM inventory_products
+            ),
+            1
+        ),
+        true
+    );
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-postgres
+  namespace: distributed-transactions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inventory-postgres
+  template:
+    metadata:
+      labels:
+        app: inventory-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+
+          env:
+            - name: POSTGRES_DB
+              value: inventory
+
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: distributed-transactions-secrets
+                  key: INVENTORY_DB_USERNAME
+
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: distributed-transactions-secrets
+                  key: INVENTORY_DB_PASSWORD
+
+          ports:
+            - containerPort: 5432
+
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U inventory_user -d inventory
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U inventory_user -d inventory
+            initialDelaySeconds: 15
+            periodSeconds: 10
+
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: inventory-postgres-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-postgres
+  namespace: distributed-transactions
+spec:
+  selector:
+    app: inventory-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-init
+  namespace: distributed-transactions
+spec:
+  backoffLimit: 4
+
+  template:
+    metadata:
+      labels:
+        app: kafka-init
+
+    spec:
+      restartPolicy: Never
+
+      containers:
+        - name: kafka-init
+          image: apache/kafka:4.1.2
+          imagePullPolicy: IfNotPresent
+
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              echo "Ожидание Kafka..."
+
+              until /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server kafka:29092 \
+                --list >/dev/null 2>&1
+              do
+                echo "Kafka пока недоступна..."
+                sleep 2
+              done
+
+              echo "Kafka доступна."
+              echo "Создание topics..."
+
+              for topic in \
+                user.created \
+                order.created \
+                payment.succeeded \
+                payment.failed
+              do
+                /opt/kafka/bin/kafka-topics.sh \
+                  --bootstrap-server kafka:29092 \
+                  --create \
+                  --if-not-exists \
+                  --topic "$topic" \
+                  --partitions 1 \
+                  --replication-factor 1
+              done
+
+              echo "Kafka topics:"
+              /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server kafka:29092 \
+                --list
+
+              echo "Kafka topics успешно созданы."

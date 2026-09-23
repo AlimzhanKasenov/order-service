@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,24 +13,51 @@ import (
 
 // Order описывает заказ пользователя.
 type Order struct {
-	ID        int64     `json:"id"`
-	UserID    int64     `json:"userId"`
-	Price     int64     `json:"price"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID           int64      `json:"id"`
+	UserID       int64      `json:"userId"`
+	Price        int64      `json:"price"`
+	ProductID    *int64     `json:"productId,omitempty"`
+	Quantity     *int64     `json:"quantity,omitempty"`
+	DeliverySlot *time.Time `json:"deliverySlot,omitempty"`
+	Status       string     `json:"status"`
+	SagaError    *string    `json:"sagaError,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
 // CreateOrderRequest описывает запрос создания заказа.
+//
+// Старый формат Stream Processing:
+//
+//	{
+//	  "userId": 1,
+//	  "price": 3000
+//	}
+//
+// Новый формат Saga:
+//
+//	{
+//	  "userId": 1,
+//	  "price": 3000,
+//	  "productId": 1,
+//	  "quantity": 2,
+//	  "deliverySlot": "2026-09-23T10:00:00Z"
+//	}
 type CreateOrderRequest struct {
-	UserID int64 `json:"userId"`
-	Price  int64 `json:"price"`
+	UserID       int64  `json:"userId"`
+	Price        int64  `json:"price"`
+	ProductID    int64  `json:"productId"`
+	Quantity     int64  `json:"quantity"`
+	DeliverySlot string `json:"deliverySlot"`
 }
 
 // createOrderHandler создаёт заказ.
 //
-// После сохранения заказа публикуется Kafka-событие
-// order.created для Billing Service.
+// Старый запрос без productId, quantity и deliverySlot
+// продолжает работать через Kafka.
+//
+// Новый запрос с данными товара и доставки
+// запускает распределённую транзакцию Saga.
 func (app *Application) createOrderHandler(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -67,6 +95,34 @@ func (app *Application) createOrderHandler(
 		return
 	}
 
+	isSagaRequest :=
+		request.ProductID != 0 ||
+			request.Quantity != 0 ||
+			strings.TrimSpace(request.DeliverySlot) != ""
+
+	if isSagaRequest {
+		app.createSagaOrderHandler(
+			w,
+			r,
+			request,
+		)
+		return
+	}
+
+	app.createLegacyOrderHandler(
+		w,
+		r,
+		request,
+	)
+}
+
+// createLegacyOrderHandler сохраняет поведение
+// предыдущего домашнего задания Stream Processing.
+func (app *Application) createLegacyOrderHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+	request CreateOrderRequest,
+) {
 	order, email, err := app.createOrder(
 		r.Context(),
 		request.UserID,
@@ -154,7 +210,6 @@ func (app *Application) getOrderHandler(
 	r *http.Request,
 ) {
 	orderID, err := parseOrderID(r)
-
 	if err != nil {
 		writeError(
 			w,
@@ -203,8 +258,8 @@ func (app *Application) getOrderHandler(
 	)
 }
 
-// createOrder создаёт заказ и одновременно получает email
-// пользователя для события order.created.
+// createOrder создаёт обычный заказ предыдущего Stream Processing
+// и одновременно получает email пользователя для события order.created.
 func (app *Application) createOrder(
 	parentContext context.Context,
 	userID int64,
@@ -221,7 +276,6 @@ func (app *Application) createOrder(
 	defer cancel()
 
 	tx, err := app.db.Begin(ctx)
-
 	if err != nil {
 		return Order{}, "", err
 	}
@@ -311,7 +365,11 @@ func (app *Application) getOrder(
 			id,
 			user_id,
 			price,
+			product_id,
+			quantity,
+			delivery_slot,
 			status,
+			saga_error,
 			created_at,
 			updated_at
 		FROM orders
@@ -322,7 +380,11 @@ func (app *Application) getOrder(
 		&order.ID,
 		&order.UserID,
 		&order.Price,
+		&order.ProductID,
+		&order.Quantity,
+		&order.DeliverySlot,
 		&order.Status,
+		&order.SagaError,
 		&order.CreatedAt,
 		&order.UpdatedAt,
 	)

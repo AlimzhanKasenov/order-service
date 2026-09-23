@@ -25,7 +25,9 @@ const (
 
 	defaultKafkaBroker = "localhost:9092"
 
-	kafkaPublishTimeout = 5 * time.Second
+	kafkaPublishTimeout    = 5 * time.Second
+	kafkaTopicCheckTimeout = 5 * time.Second
+	kafkaTopicWaitInterval = 2 * time.Second
 )
 
 // UserCreatedEvent описывает событие создания пользователя.
@@ -56,11 +58,113 @@ type PaymentEvent struct {
 	ProcessedAt time.Time `json:"processedAt"`
 }
 
+// waitForKafkaTopic ждёт, пока Kafka topic действительно станет доступен.
+//
+// Это важно при холодном старте Docker Compose:
+// контейнер Kafka уже может быть healthy, а metadata конкретного topic
+// ещё не успела стать доступной consumer-у.
+func (app *Application) waitForKafkaTopic(
+	ctx context.Context,
+	topic string,
+) error {
+	broker := getKafkaBroker()
+
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		dialContext, cancel := context.WithTimeout(
+			ctx,
+			kafkaTopicCheckTimeout,
+		)
+
+		conn, err := kafka.DialContext(
+			dialContext,
+			"tcp",
+			broker,
+		)
+
+		cancel()
+
+		if err == nil {
+			_ = conn.SetDeadline(
+				time.Now().Add(
+					kafkaTopicCheckTimeout,
+				),
+			)
+
+			partitions, readError := conn.ReadPartitions(
+				topic,
+			)
+
+			closeError := conn.Close()
+
+			if readError == nil && len(partitions) > 0 {
+				app.logger.Printf(
+					"Kafka topic готов: topic=%s broker=%s partitions=%d",
+					topic,
+					broker,
+					len(partitions),
+				)
+
+				return nil
+			}
+
+			if readError != nil {
+				err = readError
+			} else if closeError != nil {
+				err = closeError
+			} else {
+				err = errors.New(
+					"topic has no partitions",
+				)
+			}
+		}
+
+		app.logger.Printf(
+			"Kafka topic пока недоступен: topic=%s broker=%s error=%v",
+			topic,
+			broker,
+			err,
+		)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-time.After(
+			kafkaTopicWaitInterval,
+		):
+		}
+	}
+}
+
 // consumeUserCreatedEvents слушает user.created
 // и автоматически создаёт счёт пользователя.
 func (app *Application) consumeUserCreatedEvents(
 	ctx context.Context,
 ) {
+	if err := app.waitForKafkaTopic(
+		ctx,
+		userCreatedTopic,
+	); err != nil {
+		if errors.Is(
+			err,
+			context.Canceled,
+		) || ctx.Err() != nil {
+			return
+		}
+
+		app.logger.Printf(
+			"Не удалось дождаться Kafka topic %s: %v",
+			userCreatedTopic,
+			err,
+		)
+
+		return
+	}
+
 	reader := kafka.NewReader(
 		kafka.ReaderConfig{
 			Brokers: []string{
@@ -87,7 +191,9 @@ func (app *Application) consumeUserCreatedEvents(
 	)
 
 	for {
-		message, err := reader.ReadMessage(ctx)
+		message, err := reader.ReadMessage(
+			ctx,
+		)
 
 		if err != nil {
 			if errors.Is(
@@ -102,7 +208,9 @@ func (app *Application) consumeUserCreatedEvents(
 				err,
 			)
 
-			time.Sleep(time.Second)
+			time.Sleep(
+				time.Second,
+			)
 
 			continue
 		}
@@ -136,7 +244,9 @@ func (app *Application) consumeUserCreatedEvents(
 		)
 
 		if err != nil {
-			if isUniqueViolation(err) {
+			if isUniqueViolation(
+				err,
+			) {
 				app.logger.Printf(
 					"Счёт пользователя %d уже существует, повторное событие пропущено",
 					event.UserID,
@@ -175,6 +285,26 @@ func (app *Application) consumeUserCreatedEvents(
 func (app *Application) consumeOrderCreatedEvents(
 	ctx context.Context,
 ) {
+	if err := app.waitForKafkaTopic(
+		ctx,
+		orderCreatedTopic,
+	); err != nil {
+		if errors.Is(
+			err,
+			context.Canceled,
+		) || ctx.Err() != nil {
+			return
+		}
+
+		app.logger.Printf(
+			"Не удалось дождаться Kafka topic %s: %v",
+			orderCreatedTopic,
+			err,
+		)
+
+		return
+	}
+
 	reader := kafka.NewReader(
 		kafka.ReaderConfig{
 			Brokers: []string{
@@ -201,7 +331,9 @@ func (app *Application) consumeOrderCreatedEvents(
 	)
 
 	for {
-		message, err := reader.ReadMessage(ctx)
+		message, err := reader.ReadMessage(
+			ctx,
+		)
 
 		if err != nil {
 			if errors.Is(
@@ -216,7 +348,9 @@ func (app *Application) consumeOrderCreatedEvents(
 				err,
 			)
 
-			time.Sleep(time.Second)
+			time.Sleep(
+				time.Second,
+			)
 
 			continue
 		}
@@ -402,7 +536,9 @@ func publishPaymentEvent(
 // getKafkaBroker возвращает адрес Kafka.
 func getKafkaBroker() string {
 	broker := strings.TrimSpace(
-		os.Getenv("KAFKA_BROKER"),
+		os.Getenv(
+			"KAFKA_BROKER",
+		),
 	)
 
 	if broker == "" {
