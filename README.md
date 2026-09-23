@@ -1,3 +1,290 @@
+# Домашнее задание: Распределённые транзакции
+
+В проекте реализована распределённая транзакция оформления заказа с использованием Saga Pattern с оркестрацией.
+
+Оркестратором является Order Service.
+
+## Участники Saga
+
+- Order Service — оркестратор распределённой транзакции.
+- Billing Service — списание и возврат денежных средств.
+- Inventory Service — резервирование и освобождение товара.
+- Delivery Service — резервирование курьера и временного слота.
+- Notification Service — сохранён из предыдущего домашнего задания.
+- Apache Kafka — используется для событий Stream Processing и создания Billing Account после регистрации пользователя.
+
+## Основной сценарий
+
+Последовательность успешной Saga:
+
+Order Service -> Billing Service -> Inventory Service -> Delivery Service -> CONFIRMED
+
+При создании заказа Order Service:
+
+1. создаёт заказ;
+2. списывает деньги через Billing Service;
+3. резервирует товар через Inventory Service;
+4. резервирует курьера через Delivery Service;
+5. переводит заказ в статус CONFIRMED.
+
+Пример запроса:
+
+POST /orders
+
+Поля запроса:
+
+- userId — пользователь;
+- price — стоимость заказа;
+- productId — товар;
+- quantity — количество;
+- deliverySlot — временной слот доставки.
+
+## Компенсации
+
+Если Billing Service не может списать деньги:
+
+Billing FAILED -> SAGA_FAILED
+
+Inventory Service и Delivery Service не вызываются.
+
+Если Inventory Service не может зарезервировать товар:
+
+Billing OK -> Inventory FAILED -> Billing refund -> SAGA_FAILED
+
+Если Delivery Service не может зарезервировать курьера:
+
+Billing OK -> Inventory OK -> Delivery FAILED -> Inventory release -> Billing refund -> SAGA_FAILED
+
+Если компенсация сама завершается ошибкой, используется статус COMPENSATION_FAILED.
+
+Основные статусы Saga:
+
+- SAGA_STARTED
+- CONFIRMED
+- SAGA_FAILED
+- COMPENSATION_FAILED
+
+## Inventory Service
+
+Исходный код:
+
+services/inventory-service/
+
+Порт:
+
+8003
+
+Endpoints:
+
+- GET /inventory/products/{productId}
+- POST /inventory/products/{productId}/stock
+- POST /inventory/reservations
+- GET /inventory/reservations/{orderId}
+- DELETE /inventory/reservations/{orderId}
+
+Тестовые данные:
+
+- productId=1 — Учебный товар, остаток 10;
+- productId=2 — Товар без остатка, остаток 0.
+
+При успешном резервировании создаётся статус RESERVED.
+
+При компенсации резерв переводится в RELEASED, а количество товара возвращается на склад.
+
+Повторный DELETE для уже освобождённого резерва идемпотентен и повторно количество товара не увеличивает.
+
+## Delivery Service
+
+Исходный код:
+
+services/delivery-service/
+
+Порт:
+
+8004
+
+Endpoints:
+
+- POST /delivery/reservations
+- GET /delivery/reservations/{orderId}
+- DELETE /delivery/reservations/{orderId}
+
+В тестовой базе используется один активный курьер.
+
+Повторная попытка занять этого курьера на тот же deliverySlot возвращает ошибку и используется для проверки rollback Saga.
+
+## Миграция
+
+Добавлена миграция:
+
+migrations/004_add_saga_fields.sql
+
+Для заказа добавлены данные Saga:
+
+- product_id;
+- quantity;
+- delivery_slot;
+- saga_error.
+
+## Docker Compose
+
+Локальный запуск:
+
+docker compose up --build -d
+
+Проверка:
+
+docker compose ps
+
+Сервисы:
+
+- Order Service — localhost:8000
+- Billing Service — localhost:8001
+- Notification Service — localhost:8002
+- Inventory Service — localhost:8003
+- Delivery Service — localhost:8004
+
+## Kubernetes
+
+Манифесты находятся в каталоге:
+
+k8s/distributed-transactions/
+
+Namespace:
+
+distributed-transactions
+
+Создание namespace:
+
+kubectl apply -f k8s/distributed-transactions/00-namespace.yaml
+
+Полная установка:
+
+./k8s/distributed-transactions/apply.sh
+
+Проверка:
+
+kubectl get pods -n distributed-transactions
+
+В Kubernetes разворачиваются:
+
+- Order PostgreSQL;
+- Billing PostgreSQL;
+- Notification PostgreSQL;
+- Inventory PostgreSQL;
+- Delivery PostgreSQL;
+- Kafka;
+- Kafka Init Job;
+- Order Service;
+- Billing Service;
+- Notification Service;
+- Inventory Service;
+- Delivery Service;
+- NGINX Ingress.
+
+## Ingress
+
+Основной адрес:
+
+http://arch.homework
+
+Маршрутизация:
+
+- / -> Order Service
+- /billing -> Billing Service
+- /notifications -> Notification Service
+- /inventory -> Inventory Service
+- /delivery -> Delivery Service
+
+Health-check:
+
+curl http://arch.homework/health
+
+Ожидаемый ответ:
+
+{"status":"OK"}
+
+Для WSL2 и Docker Desktop используется:
+
+minikube tunnel -p stream-processing
+
+Запись в /etc/hosts:
+
+127.0.0.1 arch.homework
+
+## Проверенные сценарии
+
+Успешная Saga:
+
+Billing OK -> Inventory RESERVED -> Delivery RESERVED -> Order CONFIRMED
+
+Ошибка Billing:
+
+Billing FAILED -> Inventory не вызывается -> Delivery не вызывается -> Order SAGA_FAILED
+
+Ошибка Inventory:
+
+Billing OK -> Inventory FAILED -> Billing refund -> Delivery не вызывается -> Order SAGA_FAILED
+
+Ошибка Delivery:
+
+Billing OK -> Inventory RESERVED -> Delivery FAILED -> Inventory RELEASED -> Billing refund -> Order SAGA_FAILED
+
+Проверена идемпотентность компенсации Inventory.
+
+Повторный вызов:
+
+DELETE /inventory/reservations/{orderId}
+
+возвращает 204 No Content и повторно количество товара на складе не увеличивает.
+
+Важно: POST /orders не является идемпотентным. Повторный запрос создаёт новый заказ и новую Saga.
+
+## Postman
+
+Коллекция:
+
+postman/distributed-transactions.postman_collection.json
+
+Основная переменная:
+
+{{baseUrl}}
+
+Initial value:
+
+http://arch.homework
+
+Коллекция проверяет:
+
+- health-check;
+- регистрацию пользователя;
+- создание Billing Account через Kafka;
+- пополнение счёта;
+- успешную Saga;
+- резервирование Inventory;
+- резервирование Delivery;
+- ошибку Delivery;
+- rollback Billing;
+- rollback Inventory;
+- отсутствие Delivery reservation после ошибки;
+- идемпотентность компенсации Inventory.
+
+## Результат
+
+Реализована распределённая транзакция:
+
+Order -> Billing -> Inventory -> Delivery
+
+Использованы:
+
+- Saga Pattern;
+- Saga Orchestration;
+- Compensating Transactions.
+
+Проверены успешный сценарий, ошибки участников Saga, rollback и идемпотентность компенсации.
+
+---
+
 # Order Service
 
 Учебный проект на Go с PostgreSQL, Apache Kafka и развёртыванием в Kubernetes.

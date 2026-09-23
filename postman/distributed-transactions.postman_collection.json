@@ -1,0 +1,822 @@
+{
+  "info": {
+    "_postman_id": "2a8beaf7-7f15-4ab5-9b3e-7f48a88a6b7c",
+    "name": "Distributed Transactions - Saga",
+    "description": "Проверка Saga Orchestration: Billing -> Inventory -> Delivery, компенсации и идемпотентность.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://arch.homework",
+      "type": "string"
+    },
+    {
+      "key": "runId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "username",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "billingRetries",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "deliverySlot",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "successOrderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "failedOrderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "stockBefore",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "stockAfterSuccess",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 - Health",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Health returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test('Health status is OK', function () {",
+              "    pm.expect(response.status).to.eql('OK');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "02 - Register Saga user",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const runId = Date.now().toString();",
+              "",
+              "pm.collectionVariables.set('runId', runId);",
+              "pm.collectionVariables.set('username', 'saga' + runId);",
+              "pm.collectionVariables.set(",
+              "    'email',",
+              "    'saga' + runId + '@example.com'",
+              ");",
+              "pm.collectionVariables.set('billingRetries', '0');"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Registration returns 201', function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.expect(response.id).to.exist;",
+              "",
+              "pm.collectionVariables.set(",
+              "    'userId',",
+              "    response.id.toString()",
+              ");"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"Password12345\",\n  \"firstName\": \"Saga\",\n  \"lastName\": \"Kubernetes\",\n  \"email\": \"{{email}}\",\n  \"phone\": \"+77010000001\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/register",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "register"
+          ]
+        }
+      }
+    },
+    {
+      "name": "03 - Wait Billing account",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 404) {",
+              "    const retries = Number(",
+              "        pm.collectionVariables.get('billingRetries') || '0'",
+              "    ) + 1;",
+              "",
+              "    pm.collectionVariables.set(",
+              "        'billingRetries',",
+              "        retries.toString()",
+              "    );",
+              "",
+              "    if (retries < 10) {",
+              "        pm.execution.setNextRequest(",
+              "            '03 - Wait Billing account'",
+              "        );",
+              "    } else {",
+              "        pm.test('Billing account created by Kafka', function () {",
+              "            pm.expect.fail(",
+              "                'Billing account was not created after 10 attempts'",
+              "            );",
+              "        });",
+              "    }",
+              "} else {",
+              "    pm.test('Billing account returns 200', function () {",
+              "        pm.response.to.have.status(200);",
+              "    });",
+              "",
+              "    const response = pm.response.json();",
+              "",
+              "    pm.test('Initial balance is 0', function () {",
+              "        pm.expect(response.balance).to.eql(0);",
+              "    });",
+              "",
+              "    pm.collectionVariables.set('billingRetries', '0');",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/billing/accounts/{{userId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "billing",
+            "accounts",
+            "{{userId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "04 - Deposit 10000",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Deposit returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test('Balance becomes 10000', function () {",
+              "    pm.expect(response.balance).to.eql(10000);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 10000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/billing/accounts/{{userId}}/deposit",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "billing",
+            "accounts",
+            "{{userId}}",
+            "deposit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "05 - Inventory before Saga",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Inventory returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.expect(response.availableQuantity).to.be.above(0);",
+              "",
+              "pm.collectionVariables.set(",
+              "    'stockBefore',",
+              "    response.availableQuantity.toString()",
+              ");"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/inventory/products/1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "inventory",
+            "products",
+            "1"
+          ]
+        }
+      }
+    },
+    {
+      "name": "06 - Saga success",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const slot = new Date(Date.now() + 86400000);",
+              "slot.setUTCMilliseconds(0);",
+              "pm.collectionVariables.set(\"deliverySlot\", slot.toISOString());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Successful Saga returns 201', function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test('Order status is CONFIRMED', function () {",
+              "    pm.expect(response.status).to.eql('CONFIRMED');",
+              "});",
+              "",
+              "pm.collectionVariables.set(",
+              "    'successOrderId',",
+              "    response.id.toString()",
+              ");"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": {{userId}},\n  \"price\": 3000,\n  \"productId\": 1,\n  \"quantity\": 1,\n  \"deliverySlot\": \"{{deliverySlot}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/orders",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "orders"
+          ]
+        }
+      }
+    },
+    {
+      "name": "07 - Verify Billing after success",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Billing returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test('Balance is 7000', function () {",
+              "    pm.expect(response.balance).to.eql(7000);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/billing/accounts/{{userId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "billing",
+            "accounts",
+            "{{userId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "08 - Verify Inventory after success",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Inventory returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "const before = Number(",
+              "    pm.collectionVariables.get('stockBefore')",
+              ");",
+              "",
+              "pm.test('Stock decreased by one', function () {",
+              "    pm.expect(response.availableQuantity).to.eql(before - 1);",
+              "});",
+              "",
+              "pm.collectionVariables.set(",
+              "    'stockAfterSuccess',",
+              "    response.availableQuantity.toString()",
+              ");"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/inventory/products/1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "inventory",
+            "products",
+            "1"
+          ]
+        }
+      }
+    },
+    {
+      "name": "09 - Verify successful Inventory reservation",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Reservation returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test('Inventory reservation is RESERVED', function () {",
+              "    pm.expect(response.status).to.eql('RESERVED');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/inventory/reservations/{{successOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "inventory",
+            "reservations",
+            "{{successOrderId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "10 - Verify successful Delivery reservation",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Delivery reservation returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test('Delivery reservation is RESERVED', function () {",
+              "    pm.expect(response.status).to.eql('RESERVED');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/delivery/reservations/{{successOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "delivery",
+            "reservations",
+            "{{successOrderId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "11 - Saga rollback on Delivery",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Failed Delivery Saga returns 409', function () {",
+              "    pm.response.to.have.status(409);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test('Order status is SAGA_FAILED', function () {",
+              "    pm.expect(response.order.status).to.eql('SAGA_FAILED');",
+              "});",
+              "",
+              "pm.test('Failure came from Delivery', function () {",
+              "    pm.expect(response.message).to.include(",
+              "        'delivery step failed'",
+              "    );",
+              "});",
+              "",
+              "pm.collectionVariables.set(",
+              "    'failedOrderId',",
+              "    response.order.id.toString()",
+              ");"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": {{userId}},\n  \"price\": 2000,\n  \"productId\": 1,\n  \"quantity\": 1,\n  \"deliverySlot\": \"{{deliverySlot}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/orders",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "orders"
+          ]
+        }
+      }
+    },
+    {
+      "name": "12 - Verify Billing rollback",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Billing returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test('Balance returned to 7000', function () {",
+              "    pm.expect(response.balance).to.eql(7000);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/billing/accounts/{{userId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "billing",
+            "accounts",
+            "{{userId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "13 - Verify Inventory rollback",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Inventory returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "const expected = Number(",
+              "    pm.collectionVariables.get('stockAfterSuccess')",
+              ");",
+              "",
+              "pm.test('Stock restored after rollback', function () {",
+              "    pm.expect(response.availableQuantity).to.eql(expected);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/inventory/products/1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "inventory",
+            "products",
+            "1"
+          ]
+        }
+      }
+    },
+    {
+      "name": "14 - Verify released Inventory reservation",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Reservation returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test('Reservation status is RELEASED', function () {",
+              "    pm.expect(response.status).to.eql('RELEASED');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/inventory/reservations/{{failedOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "inventory",
+            "reservations",
+            "{{failedOrderId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "15 - Verify failed Delivery reservation absent",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Delivery reservation was not created', function () {",
+              "    pm.response.to.have.status(404);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/delivery/reservations/{{failedOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "delivery",
+            "reservations",
+            "{{failedOrderId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "16 - Repeat Inventory compensation",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Repeated compensation returns 204', function () {",
+              "    pm.response.to.have.status(204);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/inventory/reservations/{{failedOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "inventory",
+            "reservations",
+            "{{failedOrderId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "17 - Verify compensation idempotency",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Inventory returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "const expected = Number(",
+              "    pm.collectionVariables.get('stockAfterSuccess')",
+              ");",
+              "",
+              "pm.test('Repeated compensation does not restore stock twice', function () {",
+              "    pm.expect(response.availableQuantity).to.eql(expected);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/inventory/products/1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "inventory",
+            "products",
+            "1"
+          ]
+        }
+      }
+    }
+  ]
+}
