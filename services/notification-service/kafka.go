@@ -16,15 +16,17 @@ const (
 	paymentFailedTopic    = "payment.failed"
 
 	notificationSucceededConsumerGroup = "notification-service-payment-succeeded"
-
-	notificationFailedConsumerGroup = "notification-service-payment-failed"
+	notificationFailedConsumerGroup    = "notification-service-payment-failed"
 
 	defaultKafkaBroker = "localhost:9092"
+
+	kafkaNotificationRetryInterval = time.Second
 )
 
 // PaymentEvent описывает событие результата оплаты,
-// которое публикует Billing Service.
+// которое публикует Billing Service через Outbox.
 type PaymentEvent struct {
+	EventID     string    `json:"eventId"`
 	OrderID     int64     `json:"orderId"`
 	UserID      int64     `json:"userId"`
 	Price       int64     `json:"price"`
@@ -34,8 +36,7 @@ type PaymentEvent struct {
 	ProcessedAt time.Time `json:"processedAt"`
 }
 
-// consumePaymentSucceededEvents слушает payment.succeeded
-// и сохраняет успешное уведомление.
+// consumePaymentSucceededEvents слушает payment.succeeded.
 func (app *Application) consumePaymentSucceededEvents(
 	ctx context.Context,
 ) {
@@ -46,8 +47,7 @@ func (app *Application) consumePaymentSucceededEvents(
 	)
 }
 
-// consumePaymentFailedEvents слушает payment.failed
-// и сохраняет уведомление о неуспешной оплате.
+// consumePaymentFailedEvents слушает payment.failed.
 func (app *Application) consumePaymentFailedEvents(
 	ctx context.Context,
 ) {
@@ -58,8 +58,10 @@ func (app *Application) consumePaymentFailedEvents(
 	)
 }
 
-// consumePaymentEvents содержит общую логику
-// обработки payment-событий.
+// consumePaymentEvents использует Inbox Pattern.
+//
+// Kafka offset подтверждается только после
+// успешного COMMIT PostgreSQL.
 func (app *Application) consumePaymentEvents(
 	ctx context.Context,
 	topic string,
@@ -70,29 +72,26 @@ func (app *Application) consumePaymentEvents(
 			Brokers: []string{
 				getKafkaBroker(),
 			},
-
-			Topic: topic,
-
-			GroupID: groupID,
-
-			MinBytes: 1,
-			MaxBytes: 10e6,
-
-			StartOffset: kafka.FirstOffset,
+			Topic:          topic,
+			GroupID:        groupID,
+			MinBytes:       1,
+			MaxBytes:       10e6,
+			StartOffset:    kafka.FirstOffset,
+			CommitInterval: 0,
 		},
 	)
+
 	defer reader.Close()
 
 	app.logger.Printf(
-		"Kafka consumer запущен: topic=%s group=%s broker=%s",
+		"Kafka consumer запущен: topic=%s group=%s broker=%s manual_commit=true",
 		topic,
 		groupID,
 		getKafkaBroker(),
 	)
 
 	for {
-		message, err := reader.ReadMessage(ctx)
-
+		message, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if errors.Is(
 				err,
@@ -107,7 +106,9 @@ func (app *Application) consumePaymentEvents(
 				err,
 			)
 
-			time.Sleep(time.Second)
+			if !waitNotificationRetry(ctx) {
+				return
+			}
 
 			continue
 		}
@@ -124,55 +125,111 @@ func (app *Application) consumePaymentEvents(
 				err,
 			)
 
+			if err := reader.CommitMessages(
+				ctx,
+				message,
+			); err != nil {
+				app.logger.Printf(
+					"Ошибка commit некорректного Kafka-события: %v",
+					err,
+				)
+			}
+
 			continue
 		}
 
-		if event.UserID <= 0 ||
+		if event.EventID == "" ||
+			event.UserID <= 0 ||
 			event.OrderID <= 0 ||
 			event.Email == "" {
 			app.logger.Printf(
-				"Пропущено некорректное payment-событие topic=%s order_id=%d user_id=%d",
+				"Пропущено некорректное payment-событие topic=%s event_id=%q order_id=%d user_id=%d",
 				topic,
+				event.EventID,
 				event.OrderID,
 				event.UserID,
 			)
 
+			if err := reader.CommitMessages(
+				ctx,
+				message,
+			); err != nil {
+				app.logger.Printf(
+					"Ошибка commit некорректного payment-события: %v",
+					err,
+				)
+			}
+
 			continue
 		}
 
-		request := buildNotificationFromPaymentEvent(
-			event,
-		)
-
-		notification, err := app.createNotification(
-			ctx,
-			request,
-		)
-
-		if err != nil {
-			app.logger.Printf(
-				"Ошибка сохранения Kafka-уведомления topic=%s order_id=%d: %v",
+		for {
+			notification,
+				duplicate,
+				err := app.processPaymentNotification(
+				ctx,
+				event,
 				topic,
-				event.OrderID,
-				err,
 			)
 
-			continue
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+
+				app.logger.Printf(
+					"Ошибка транзакционной обработки Notification event_id=%s order_id=%d: %v",
+					event.EventID,
+					event.OrderID,
+					err,
+				)
+
+				if !waitNotificationRetry(ctx) {
+					return
+				}
+
+				continue
+			}
+
+			if duplicate {
+				app.logger.Printf(
+					"Inbox: повторное payment-событие Notification пропущено event_id=%s order_id=%d",
+					event.EventID,
+					event.OrderID,
+				)
+			} else {
+				app.logger.Printf(
+					"Kafka notification сохранён транзакционно: event_id=%s topic=%s notification_id=%d order_id=%d user_id=%d status=%s",
+					event.EventID,
+					topic,
+					notification.ID,
+					notification.OrderID,
+					notification.UserID,
+					notification.Status,
+				)
+			}
+
+			break
 		}
 
-		app.logger.Printf(
-			"Kafka notification сохранён: topic=%s notification_id=%d order_id=%d user_id=%d status=%s",
-			topic,
-			notification.ID,
-			notification.OrderID,
-			notification.UserID,
-			notification.Status,
-		)
+		if err := reader.CommitMessages(
+			ctx,
+			message,
+		); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			app.logger.Printf(
+				"Ошибка Kafka commit Notification event_id=%s: %v",
+				event.EventID,
+				err,
+			)
+		}
 	}
 }
 
-// buildNotificationFromPaymentEvent формирует
-// "письмо счастья" или "письмо горя".
+// buildNotificationFromPaymentEvent формирует уведомление.
 func buildNotificationFromPaymentEvent(
 	event PaymentEvent,
 ) CreateNotificationRequest {
@@ -181,12 +238,9 @@ func buildNotificationFromPaymentEvent(
 			UserID:  event.UserID,
 			OrderID: event.OrderID,
 			Email:   event.Email,
-
 			Subject: "Заказ успешно оплачен",
-
 			Message: "Ваш заказ успешно оплачен.",
-
-			Status: "SUCCESS",
+			Status:  "SUCCESS",
 		}
 	}
 
@@ -194,12 +248,26 @@ func buildNotificationFromPaymentEvent(
 		UserID:  event.UserID,
 		OrderID: event.OrderID,
 		Email:   event.Email,
-
 		Subject: "Ошибка оплаты заказа",
-
 		Message: "Недостаточно средств для оплаты заказа.",
+		Status:  "FAILED",
+	}
+}
 
-		Status: "FAILED",
+func waitNotificationRetry(
+	ctx context.Context,
+) bool {
+	timer := time.NewTimer(
+		kafkaNotificationRetryInterval,
+	)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+
+	case <-timer.C:
+		return true
 	}
 }
 

@@ -100,6 +100,10 @@ func main() {
 	)
 	defer cancelKafka()
 
+	go app.runOutboxPublisher(
+		kafkaContext,
+	)
+
 	go app.consumePaymentSucceededEvents(
 		kafkaContext,
 	)

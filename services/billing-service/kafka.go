@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,15 +21,15 @@ const (
 
 	billingOrderCreatedConsumerGroup = "billing-service-order-created"
 
-	defaultKafkaBroker = "localhost:9092"
-
-	kafkaPublishTimeout    = 5 * time.Second
-	kafkaTopicCheckTimeout = 5 * time.Second
-	kafkaTopicWaitInterval = 2 * time.Second
+	defaultKafkaBroker       = "localhost:9092"
+	kafkaTopicCheckTimeout   = 5 * time.Second
+	kafkaTopicWaitInterval   = 2 * time.Second
+	kafkaProcessingRetryWait = time.Second
 )
 
 // UserCreatedEvent описывает событие создания пользователя.
 type UserCreatedEvent struct {
+	EventID   string    `json:"eventId"`
 	UserID    int64     `json:"userId"`
 	Username  string    `json:"username"`
 	Email     string    `json:"email"`
@@ -40,6 +38,7 @@ type UserCreatedEvent struct {
 
 // OrderCreatedEvent описывает событие создания заказа.
 type OrderCreatedEvent struct {
+	EventID   string    `json:"eventId"`
 	OrderID   int64     `json:"orderId"`
 	UserID    int64     `json:"userId"`
 	Price     int64     `json:"price"`
@@ -48,6 +47,9 @@ type OrderCreatedEvent struct {
 }
 
 // PaymentEvent описывает результат оплаты заказа.
+//
+// eventId будет автоматически добавлен
+// функцией insertOutboxEventTx.
 type PaymentEvent struct {
 	OrderID     int64     `json:"orderId"`
 	UserID      int64     `json:"userId"`
@@ -58,11 +60,7 @@ type PaymentEvent struct {
 	ProcessedAt time.Time `json:"processedAt"`
 }
 
-// waitForKafkaTopic ждёт, пока Kafka topic действительно станет доступен.
-//
-// Это важно при холодном старте Docker Compose:
-// контейнер Kafka уже может быть healthy, а metadata конкретного topic
-// ещё не успела стать доступной consumer-у.
+// waitForKafkaTopic ждёт готовности Kafka topic.
 func (app *Application) waitForKafkaTopic(
 	ctx context.Context,
 	topic string,
@@ -100,7 +98,8 @@ func (app *Application) waitForKafkaTopic(
 
 			closeError := conn.Close()
 
-			if readError == nil && len(partitions) > 0 {
+			if readError == nil &&
+				len(partitions) > 0 {
 				app.logger.Printf(
 					"Kafka topic готов: topic=%s broker=%s partitions=%d",
 					topic,
@@ -140,8 +139,11 @@ func (app *Application) waitForKafkaTopic(
 	}
 }
 
-// consumeUserCreatedEvents слушает user.created
-// и автоматически создаёт счёт пользователя.
+// consumeUserCreatedEvents слушает user.created.
+//
+// Используется FetchMessage вместо ReadMessage,
+// чтобы Kafka offset подтверждался вручную только
+// после успешного COMMIT PostgreSQL.
 func (app *Application) consumeUserCreatedEvents(
 	ctx context.Context,
 ) {
@@ -179,22 +181,24 @@ func (app *Application) consumeUserCreatedEvents(
 			MaxBytes: 10e6,
 
 			StartOffset: kafka.FirstOffset,
+
+			CommitInterval: 0,
 		},
 	)
+
 	defer reader.Close()
 
 	app.logger.Printf(
-		"Kafka consumer запущен: topic=%s group=%s broker=%s",
+		"Kafka consumer запущен: topic=%s group=%s broker=%s manual_commit=true",
 		userCreatedTopic,
 		billingUserCreatedConsumerGroup,
 		getKafkaBroker(),
 	)
 
 	for {
-		message, err := reader.ReadMessage(
+		message, err := reader.FetchMessage(
 			ctx,
 		)
-
 		if err != nil {
 			if errors.Is(
 				err,
@@ -208,9 +212,7 @@ func (app *Application) consumeUserCreatedEvents(
 				err,
 			)
 
-			time.Sleep(
-				time.Second,
-			)
+			time.Sleep(time.Second)
 
 			continue
 		}
@@ -226,62 +228,118 @@ func (app *Application) consumeUserCreatedEvents(
 				err,
 			)
 
+			if err := commitKafkaMessage(
+				ctx,
+				reader,
+				message,
+			); err != nil {
+				app.logger.Printf(
+					"Ошибка commit некорректного user.created: %v",
+					err,
+				)
+			}
+
 			continue
 		}
 
-		if event.UserID <= 0 {
+		if event.EventID == "" ||
+			event.UserID <= 0 {
 			app.logger.Printf(
-				"Пропущено событие user.created с некорректным userId=%d",
+				"Пропущено некорректное user.created: event_id=%q user_id=%d",
+				event.EventID,
 				event.UserID,
 			)
 
+			if err := commitKafkaMessage(
+				ctx,
+				reader,
+				message,
+			); err != nil {
+				app.logger.Printf(
+					"Ошибка commit некорректного user.created: %v",
+					err,
+				)
+			}
+
 			continue
 		}
 
-		account, err := app.createAccount(
-			ctx,
-			event.UserID,
-		)
-
-		if err != nil {
-			if isUniqueViolation(
-				err,
-			) {
-				app.logger.Printf(
-					"Счёт пользователя %d уже существует, повторное событие пропущено",
-					event.UserID,
+		for {
+			account, created, duplicate, err :=
+				app.processUserCreatedEvent(
+					ctx,
+					event,
 				)
+
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+
+				app.logger.Printf(
+					"Ошибка транзакционной обработки user.created event_id=%s user_id=%d: %v",
+					event.EventID,
+					event.UserID,
+					err,
+				)
+
+				if !waitKafkaProcessingRetry(ctx) {
+					return
+				}
 
 				continue
 			}
 
-			app.logger.Printf(
-				"Ошибка создания счёта из user.created user_id=%d: %v",
-				event.UserID,
-				err,
-			)
+			if duplicate {
+				app.logger.Printf(
+					"Inbox: повторное user.created пропущено event_id=%s user_id=%d",
+					event.EventID,
+					event.UserID,
+				)
+			} else if created {
+				app.logger.Printf(
+					"Kafka user.created обработан: event_id=%s user_id=%d account_id=%d balance=%d",
+					event.EventID,
+					account.UserID,
+					account.ID,
+					account.Balance,
+				)
+			} else {
+				app.logger.Printf(
+					"Kafka user.created обработан: event_id=%s user_id=%d счёт уже существовал",
+					event.EventID,
+					event.UserID,
+				)
+			}
 
-			continue
+			break
 		}
 
-		app.logger.Printf(
-			"Kafka user.created обработан: user_id=%d account_id=%d balance=%d",
-			account.UserID,
-			account.ID,
-			account.Balance,
-		)
+		if err := commitKafkaMessage(
+			ctx,
+			reader,
+			message,
+		); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			app.logger.Printf(
+				"Ошибка Kafka commit user.created event_id=%s: %v",
+				event.EventID,
+				err,
+			)
+		}
 	}
 }
 
 // consumeOrderCreatedEvents слушает order.created.
 //
-// Если денег хватает:
-//   - списывает стоимость заказа;
-//   - публикует payment.succeeded.
+// Обработка заказа выполняется транзакционно:
 //
-// Если денег недостаточно:
-//   - баланс не изменяет;
-//   - публикует payment.failed.
+// Inbox -> SELECT FOR UPDATE -> balance -> Outbox -> COMMIT.
+//
+// Kafka offset подтверждается только после успешного DB commit.
 func (app *Application) consumeOrderCreatedEvents(
 	ctx context.Context,
 ) {
@@ -319,22 +377,24 @@ func (app *Application) consumeOrderCreatedEvents(
 			MaxBytes: 10e6,
 
 			StartOffset: kafka.FirstOffset,
+
+			CommitInterval: 0,
 		},
 	)
+
 	defer reader.Close()
 
 	app.logger.Printf(
-		"Kafka consumer запущен: topic=%s group=%s broker=%s",
+		"Kafka consumer запущен: topic=%s group=%s broker=%s manual_commit=true",
 		orderCreatedTopic,
 		billingOrderCreatedConsumerGroup,
 		getKafkaBroker(),
 	)
 
 	for {
-		message, err := reader.ReadMessage(
+		message, err := reader.FetchMessage(
 			ctx,
 		)
-
 		if err != nil {
 			if errors.Is(
 				err,
@@ -348,9 +408,7 @@ func (app *Application) consumeOrderCreatedEvents(
 				err,
 			)
 
-			time.Sleep(
-				time.Second,
-			)
+			time.Sleep(time.Second)
 
 			continue
 		}
@@ -366,171 +424,158 @@ func (app *Application) consumeOrderCreatedEvents(
 				err,
 			)
 
+			if err := commitKafkaMessage(
+				ctx,
+				reader,
+				message,
+			); err != nil {
+				app.logger.Printf(
+					"Ошибка commit некорректного order.created: %v",
+					err,
+				)
+			}
+
 			continue
 		}
 
-		if event.OrderID <= 0 ||
+		if event.EventID == "" ||
+			event.OrderID <= 0 ||
 			event.UserID <= 0 ||
 			event.Price <= 0 {
 			app.logger.Printf(
-				"Пропущено некорректное order.created: order_id=%d user_id=%d price=%d",
+				"Пропущено некорректное order.created: event_id=%q order_id=%d user_id=%d price=%d",
+				event.EventID,
 				event.OrderID,
 				event.UserID,
 				event.Price,
 			)
 
-			continue
-		}
-
-		account, sufficientFunds, err := app.withdraw(
-			ctx,
-			event.UserID,
-			event.Price,
-		)
-
-		if err != nil {
-			app.logger.Printf(
-				"Ошибка оплаты заказа order_id=%d user_id=%d: %v",
-				event.OrderID,
-				event.UserID,
-				err,
-			)
-
-			continue
-		}
-
-		if sufficientFunds {
-			paymentEvent := PaymentEvent{
-				OrderID:     event.OrderID,
-				UserID:      event.UserID,
-				Price:       event.Price,
-				Email:       event.Email,
-				Balance:     account.Balance,
-				Status:      "SUCCESS",
-				ProcessedAt: time.Now().UTC(),
-			}
-
-			if err := publishPaymentEvent(
+			if err := commitKafkaMessage(
 				ctx,
-				paymentSucceededTopic,
-				paymentEvent,
+				reader,
+				message,
 			); err != nil {
 				app.logger.Printf(
-					"Ошибка публикации payment.succeeded order_id=%d: %v",
-					event.OrderID,
+					"Ошибка commit некорректного order.created: %v",
 					err,
 				)
+			}
+
+			continue
+		}
+
+		var account Account
+		var sufficientFunds bool
+		var duplicate bool
+
+		for {
+			account,
+				sufficientFunds,
+				duplicate,
+				err = app.processOrderCreatedEvent(
+				ctx,
+				event,
+			)
+
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+
+				app.logger.Printf(
+					"Ошибка транзакционной оплаты event_id=%s order_id=%d user_id=%d: %v",
+					event.EventID,
+					event.OrderID,
+					event.UserID,
+					err,
+				)
+
+				if !waitKafkaProcessingRetry(ctx) {
+					return
+				}
 
 				continue
 			}
 
+			break
+		}
+
+		if duplicate {
 			app.logger.Printf(
-				"Заказ успешно оплачен: order_id=%d user_id=%d price=%d balance=%d topic=%s",
+				"Inbox: повторное order.created пропущено event_id=%s order_id=%d",
+				event.EventID,
+				event.OrderID,
+			)
+		} else if sufficientFunds {
+			app.logger.Printf(
+				"Заказ успешно оплачен транзакционно: event_id=%s order_id=%d user_id=%d price=%d balance=%d outbox_topic=%s",
+				event.EventID,
 				event.OrderID,
 				event.UserID,
 				event.Price,
 				account.Balance,
 				paymentSucceededTopic,
 			)
-
-			continue
-		}
-
-		paymentEvent := PaymentEvent{
-			OrderID:     event.OrderID,
-			UserID:      event.UserID,
-			Price:       event.Price,
-			Email:       event.Email,
-			Balance:     account.Balance,
-			Status:      "FAILED",
-			ProcessedAt: time.Now().UTC(),
-		}
-
-		if err := publishPaymentEvent(
-			ctx,
-			paymentFailedTopic,
-			paymentEvent,
-		); err != nil {
+		} else {
 			app.logger.Printf(
-				"Ошибка публикации payment.failed order_id=%d: %v",
+				"Недостаточно средств: event_id=%s order_id=%d user_id=%d price=%d balance=%d outbox_topic=%s",
+				event.EventID,
 				event.OrderID,
+				event.UserID,
+				event.Price,
+				account.Balance,
+				paymentFailedTopic,
+			)
+		}
+
+		if err := commitKafkaMessage(
+			ctx,
+			reader,
+			message,
+		); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			app.logger.Printf(
+				"Ошибка Kafka commit order.created event_id=%s: %v",
+				event.EventID,
 				err,
 			)
-
-			continue
 		}
-
-		app.logger.Printf(
-			"Недостаточно средств: order_id=%d user_id=%d price=%d balance=%d topic=%s",
-			event.OrderID,
-			event.UserID,
-			event.Price,
-			account.Balance,
-			paymentFailedTopic,
-		)
 	}
 }
 
-// publishPaymentEvent публикует результат оплаты в Kafka.
-func publishPaymentEvent(
-	parentContext context.Context,
-	topic string,
-	event PaymentEvent,
+// commitKafkaMessage подтверждает offset.
+//
+// Вызывается только после успешной обработки события
+// или для заведомо некорректного poison message.
+func commitKafkaMessage(
+	ctx context.Context,
+	reader *kafka.Reader,
+	message kafka.Message,
 ) error {
-	payload, err := json.Marshal(
-		event,
-	)
-
-	if err != nil {
-		return fmt.Errorf(
-			"failed to encode payment event: %w",
-			err,
-		)
-	}
-
-	writer := &kafka.Writer{
-		Addr: kafka.TCP(
-			getKafkaBroker(),
-		),
-
-		Topic: topic,
-
-		Balancer: &kafka.LeastBytes{},
-	}
-
-	defer writer.Close()
-
-	ctx, cancel := context.WithTimeout(
-		parentContext,
-		kafkaPublishTimeout,
-	)
-	defer cancel()
-
-	err = writer.WriteMessages(
+	return reader.CommitMessages(
 		ctx,
-		kafka.Message{
-			Key: []byte(
-				strconv.FormatInt(
-					event.OrderID,
-					10,
-				),
-			),
-
-			Value: payload,
-
-			Time: event.ProcessedAt,
-		},
+		message,
 	)
+}
 
-	if err != nil {
-		return fmt.Errorf(
-			"failed to publish %s: %w",
-			topic,
-			err,
-		)
+func waitKafkaProcessingRetry(
+	ctx context.Context,
+) bool {
+	timer := time.NewTimer(
+		kafkaProcessingRetryWait,
+	)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+
+	case <-timer.C:
+		return true
 	}
-
-	return nil
 }
 
 // getKafkaBroker возвращает адрес Kafka.

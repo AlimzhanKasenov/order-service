@@ -68,6 +68,10 @@ func main() {
 	)
 	defer cancelKafka()
 
+	go app.runOutboxPublisher(
+		kafkaContext,
+	)
+
 	go app.consumeUserCreatedEvents(
 		kafkaContext,
 	)

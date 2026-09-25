@@ -1655,3 +1655,14 @@ AUTHENTICATION.md
 ```text
 LOGGING.md
 ```
+
+
+## Дополнение после ревью
+
+В проект добавлены Transactional Outbox/Inbox, ручной commit Kafka offset, READ COMMITTED и SELECT FOR UPDATE.
+
+Схемы Saga с Inventory Service и Delivery Service, а также описание тестов отказоустойчивости находятся в:
+
+```text
+docs/review-fixes.md
+```

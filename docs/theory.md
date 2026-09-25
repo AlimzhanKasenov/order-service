@@ -665,3 +665,13 @@ docs/asyncapi.yaml
 
 Таким образом, в проекте представлены IDL как для синхронного HTTP API,
 так и для асинхронного событийного взаимодействия.
+
+---
+
+# 11. Дополнение после ревью
+
+Расширенное описание Transactional Outbox/Inbox, READ COMMITTED, SELECT FOR UPDATE, а также схемы взаимодействия с Inventory Service и Delivery Service находятся в:
+
+```text
+docs/review-fixes.md
+```

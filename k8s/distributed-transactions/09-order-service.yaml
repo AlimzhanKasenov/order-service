@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: order-service
-          image: alimzhankassenov/order-service:distributed-transactions
+          image: alimzhankassenov/order-service:outbox-inbox
           imagePullPolicy: Always
 
           ports:

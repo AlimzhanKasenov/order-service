@@ -121,35 +121,11 @@ func (app *Application) registerHandler(
 		return
 	}
 
-	ctx, cancel := contextWithDatabaseTimeout(
-		r,
-	)
-	defer cancel()
-
-	query := `
-		INSERT INTO users
-		(
-			username,
-			password_hash,
-			first_name,
-			last_name,
-			email,
-			phone
-		)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id
-	`
-
-	err = app.db.QueryRow(
-		ctx,
-		query,
-		user.Username,
+	user, err = app.createUserWithOutbox(
+		r.Context(),
+		user,
 		string(passwordHash),
-		user.FirstName,
-		user.LastName,
-		user.Email,
-		user.Phone,
-	).Scan(&user.ID)
+	)
 
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -174,26 +150,6 @@ func (app *Application) registerHandler(
 		return
 	}
 
-	// После создания пользователя отправляем событие
-	// в Kafka для Billing Service.
-	if err := publishUserCreatedEvent(
-		r.Context(),
-		user,
-	); err != nil {
-		app.logger.Printf(
-			"Ошибка публикации user.created для пользователя ID %d: %v",
-			user.ID,
-			err,
-		)
-
-		writeError(
-			w,
-			http.StatusInternalServerError,
-			"failed to publish user created event",
-		)
-		return
-	}
-
 	emitStructuredLog(
 		"INFO",
 		"Пользователь зарегистрирован",
@@ -206,9 +162,9 @@ func (app *Application) registerHandler(
 
 	emitStructuredLog(
 		"INFO",
-		"Событие user.created опубликовано",
+		"Событие user.created сохранено в Transactional Outbox",
 		map[string]any{
-			"event":   "user_created_published",
+			"event":   "user_created_outbox",
 			"user_id": user.ID,
 			"topic":   userCreatedTopic,
 		},

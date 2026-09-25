@@ -123,7 +123,7 @@ func (app *Application) createLegacyOrderHandler(
 	r *http.Request,
 	request CreateOrderRequest,
 ) {
-	order, email, err := app.createOrder(
+	order, _, err := app.createOrder(
 		r.Context(),
 		request.UserID,
 		request.Price,
@@ -155,25 +155,6 @@ func (app *Application) createLegacyOrderHandler(
 		return
 	}
 
-	if err := publishOrderCreatedEvent(
-		r.Context(),
-		order,
-		email,
-	); err != nil {
-		app.logger.Printf(
-			"Ошибка публикации order.created order_id=%d: %v",
-			order.ID,
-			err,
-		)
-
-		writeError(
-			w,
-			http.StatusInternalServerError,
-			"failed to publish order created event",
-		)
-		return
-	}
-
 	emitStructuredLog(
 		"INFO",
 		"Заказ создан",
@@ -188,9 +169,9 @@ func (app *Application) createLegacyOrderHandler(
 
 	emitStructuredLog(
 		"INFO",
-		"Событие order.created опубликовано",
+		"Событие order.created сохранено в Transactional Outbox",
 		map[string]any{
-			"event":    "order_created_published",
+			"event":    "order_created_outbox",
 			"order_id": order.ID,
 			"user_id":  order.UserID,
 			"topic":    orderCreatedTopic,
@@ -275,7 +256,12 @@ func (app *Application) createOrder(
 	)
 	defer cancel()
 
-	tx, err := app.db.Begin(ctx)
+	tx, err := app.db.BeginTx(
+		ctx,
+		pgx.TxOptions{
+			IsoLevel: pgx.ReadCommitted,
+		},
+	)
 	if err != nil {
 		return Order{}, "", err
 	}
@@ -329,6 +315,29 @@ func (app *Application) createOrder(
 		&order.Status,
 		&order.CreatedAt,
 		&order.UpdatedAt,
+	)
+
+	if err != nil {
+		return Order{}, "", err
+	}
+
+	event := OrderCreatedEvent{
+		OrderID:   order.ID,
+		UserID:    order.UserID,
+		Price:     order.Price,
+		Email:     email,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	_, err = insertOutboxEventTx(
+		ctx,
+		tx,
+		orderCreatedTopic,
+		strconv.FormatInt(
+			order.ID,
+			10,
+		),
+		event,
 	)
 
 	if err != nil {

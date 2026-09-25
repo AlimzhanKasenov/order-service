@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: billing-service
-          image: alimzhankassenov/billing-service:distributed-transactions
+          image: alimzhankassenov/billing-service:outbox-inbox
           imagePullPolicy: Always
 
           ports:

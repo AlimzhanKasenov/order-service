@@ -432,43 +432,76 @@ func (app *Application) deposit(
 	parentContext context.Context,
 	userID int64,
 	amount int64,
-) (Account, error) {
+) (
+	Account,
+	error,
+) {
 	ctx, cancel := context.WithTimeout(
 		parentContext,
 		databaseRequestTimeout,
 	)
 	defer cancel()
 
-	var account Account
+	tx, err := app.db.BeginTx(
+		ctx,
+		pgx.TxOptions{
+			IsoLevel: pgx.ReadCommitted,
+		},
+	)
+	if err != nil {
+		return Account{}, err
+	}
 
-	query := `
-		UPDATE accounts
-		SET
-			balance = balance + $2,
-			updated_at = CURRENT_TIMESTAMP
-		WHERE user_id = $1
-		RETURNING
+	defer tx.Rollback(ctx)
+
+	account, err := lockAccountForUpdateTx(
+		ctx,
+		tx,
+		userID,
+	)
+	if err != nil {
+		return Account{}, err
+	}
+
+	account.Balance += amount
+
+	if err := updateAccountBalanceTx(
+		ctx,
+		tx,
+		account.ID,
+		account.Balance,
+	); err != nil {
+		return Account{}, err
+	}
+
+	if err := tx.QueryRow(
+		ctx,
+		`
+		SELECT
 			id,
 			user_id,
 			balance,
 			created_at,
 			updated_at
-	`
-
-	err := app.db.QueryRow(
-		ctx,
-		query,
-		userID,
-		amount,
+		FROM accounts
+		WHERE id = $1
+		`,
+		account.ID,
 	).Scan(
 		&account.ID,
 		&account.UserID,
 		&account.Balance,
 		&account.CreatedAt,
 		&account.UpdatedAt,
-	)
+	); err != nil {
+		return Account{}, err
+	}
 
-	return account, err
+	if err := tx.Commit(ctx); err != nil {
+		return Account{}, err
+	}
+
+	return account, nil
 }
 
 // withdraw атомарно списывает деньги.
@@ -490,67 +523,72 @@ func (app *Application) withdraw(
 	)
 	defer cancel()
 
-	var account Account
+	tx, err := app.db.BeginTx(
+		ctx,
+		pgx.TxOptions{
+			IsoLevel: pgx.ReadCommitted,
+		},
+	)
+	if err != nil {
+		return Account{}, false, err
+	}
 
-	query := `
-		UPDATE accounts
-		SET
-			balance = balance - $2,
-			updated_at = CURRENT_TIMESTAMP
-		WHERE
-			user_id = $1
-			AND balance >= $2
-		RETURNING
+	defer tx.Rollback(ctx)
+
+	account, err := lockAccountForUpdateTx(
+		ctx,
+		tx,
+		userID,
+	)
+	if err != nil {
+		return Account{}, false, err
+	}
+
+	if account.Balance < amount {
+		if err := tx.Commit(ctx); err != nil {
+			return Account{}, false, err
+		}
+
+		return account, false, nil
+	}
+
+	account.Balance -= amount
+
+	if err := updateAccountBalanceTx(
+		ctx,
+		tx,
+		account.ID,
+		account.Balance,
+	); err != nil {
+		return Account{}, false, err
+	}
+
+	if err := tx.QueryRow(
+		ctx,
+		`
+		SELECT
 			id,
 			user_id,
 			balance,
 			created_at,
 			updated_at
-	`
-
-	err := app.db.QueryRow(
-		ctx,
-		query,
-		userID,
-		amount,
+		FROM accounts
+		WHERE id = $1
+		`,
+		account.ID,
 	).Scan(
 		&account.ID,
 		&account.UserID,
 		&account.Balance,
 		&account.CreatedAt,
 		&account.UpdatedAt,
-	)
-
-	if err == nil {
-		return account, true, nil
-	}
-
-	if !errors.Is(
-		err,
-		pgx.ErrNoRows,
-	) {
+	); err != nil {
 		return Account{}, false, err
 	}
 
-	// UPDATE мог не затронуть строку по двум причинам:
-	// аккаунта нет или денег недостаточно.
-	//
-	// Проверяем существование счёта.
-	existingAccount, getError := app.getAccount(
-		parentContext,
-		userID,
-	)
-
-	if errors.Is(
-		getError,
-		pgx.ErrNoRows,
-	) {
-		return Account{}, false, pgx.ErrNoRows
+	if err := tx.Commit(ctx); err != nil {
+		return Account{}, false, err
 	}
 
-	if getError != nil {
-		return Account{}, false, getError
-	}
-
-	return existingAccount, false, nil
+	return account, true, nil
 }
