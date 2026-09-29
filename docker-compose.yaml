@@ -23,6 +23,7 @@ services:
       - ./migrations/003_create_orders.sql:/docker-entrypoint-initdb.d/003_create_orders.sql:ro
       - ./migrations/004_add_saga_fields.sql:/docker-entrypoint-initdb.d/004_add_saga_fields.sql:ro
       - ./migrations/005_create_outbox_inbox.sql:/docker-entrypoint-initdb.d/005_create_outbox_inbox.sql:ro
+      - ./migrations/006_add_order_idempotency.sql:/docker-entrypoint-initdb.d/006_add_order_idempotency.sql:ro
 
     healthcheck:
       test:

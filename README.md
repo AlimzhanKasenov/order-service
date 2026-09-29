@@ -238,7 +238,7 @@ DELETE /inventory/reservations/{orderId}
 
 возвращает 204 No Content и повторно количество товара на складе не увеличивает.
 
-Важно: POST /orders не является идемпотентным. Повторный запрос создаёт новый заказ и новую Saga.
+Важно: POST /orders поддерживает Idempotency-Key. Повторный запрос с тем же ключом и тем же телом возвращает существующий заказ и не запускает Saga повторно.
 
 ## Postman
 
@@ -1666,3 +1666,77 @@ LOGGING.md
 ```text
 docs/review-fixes.md
 ```
+
+---
+
+# Идемпотентность и коммутативность API
+
+## Использованный паттерн
+
+Для `POST /orders` реализован паттерн **Idempotency Key**.
+
+Клиент передаёт заголовок `Idempotency-Key`.
+Order Service вычисляет SHA-256 от параметров заказа и сохраняет:
+
+- `idempotency_key`;
+- `request_hash`;
+- `order_id`;
+- `created_at`.
+
+Данные хранятся в таблице `order_idempotency_keys`.
+
+Первый запрос с новым ключом создаёт заказ и запускает Saga:
+
+`Billing -> Inventory -> Delivery`.
+
+Повторный запрос с тем же ключом и тем же телом возвращает ранее созданный заказ и не запускает Saga повторно.
+
+Проверенное поведение:
+
+- первый запрос: `201 Created`;
+- повторный запрос: `200 OK`;
+- заголовок повторного ответа: `Idempotency-Replayed: true`;
+- возвращается тот же `orderId`;
+- деньги повторно не списываются;
+- товар повторно не резервируется;
+- тот же ключ с другим телом возвращает `409 Conflict`.
+
+Для Kafka уже используется **Inbox Pattern**. Обработанный `eventId` сохраняется в таблице `inbox_events`, поэтому повторная доставка одного Kafka-события не приводит к повторному бизнес-эффекту.
+
+## Установка
+
+Namespace:
+
+`distributed-transactions`
+
+Создание namespace:
+
+`kubectl apply -f k8s/distributed-transactions/00-namespace.yaml`
+
+Полная установка приложения:
+
+`./k8s/distributed-transactions/apply.sh`
+
+Основной адрес приложения:
+
+`http://arch.homework`
+
+Docker image Order Service:
+
+`alimzhankassenov/order-service:idempotency`
+
+## Postman
+
+Коллекция:
+
+`postman/idempotency.postman_collection.json`
+
+Переменная коллекции:
+
+`{{baseUrl}}`
+
+Initial value:
+
+`http://arch.homework`
+
+Коллекция проверяет первый идемпотентный запрос, повтор того же запроса, отсутствие повторного списания денег и резервирования товара, а также `409 Conflict` при использовании одного ключа для разных запросов.

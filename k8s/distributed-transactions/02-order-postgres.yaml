@@ -124,6 +124,23 @@ data:
         processed_at TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+  006_add_order_idempotency.sql: |
+    CREATE TABLE IF NOT EXISTS order_idempotency_keys
+    (
+        idempotency_key VARCHAR(128) PRIMARY KEY,
+        request_hash CHAR(64) NOT NULL,
+        order_id BIGINT NOT NULL UNIQUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+        CONSTRAINT fk_order_idempotency_order
+            FOREIGN KEY (order_id)
+            REFERENCES orders(id)
+            ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_order_idempotency_order_id
+        ON order_idempotency_keys (order_id);
+
 ---
 apiVersion: apps/v1
 kind: Deployment

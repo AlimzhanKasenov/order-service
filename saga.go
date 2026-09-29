@@ -92,11 +92,55 @@ func (app *Application) createSagaOrderHandler(
 		return
 	}
 
-	order, err := app.createSagaOrder(
-		r.Context(),
+	idempotencyKey, err := normalizeIdempotencyKey(
+		r.Header.Get("Idempotency-Key"),
+	)
+	if err != nil {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			err.Error(),
+		)
+		return
+	}
+
+	requestHash, err := hashSagaCreateOrderRequest(
 		request,
 		deliverySlot,
 	)
+	if err != nil {
+		app.logger.Printf(
+			"Ошибка вычисления request hash: %v",
+			err,
+		)
+
+		writeError(
+			w,
+			http.StatusInternalServerError,
+			"failed to calculate request hash",
+		)
+		return
+	}
+
+	order, replayed, err := app.createSagaOrderIdempotently(
+		r.Context(),
+		request,
+		deliverySlot,
+		idempotencyKey,
+		requestHash,
+	)
+
+	if errors.Is(
+		err,
+		ErrIdempotencyConflict,
+	) {
+		writeError(
+			w,
+			http.StatusConflict,
+			"Idempotency-Key was already used with another request",
+		)
+		return
+	}
 
 	if errors.Is(
 		err,
@@ -122,6 +166,45 @@ func (app *Application) createSagaOrderHandler(
 			"failed to create saga order",
 		)
 		return
+	}
+
+	if idempotencyKey != "" {
+		w.Header().Set(
+			"Idempotency-Key",
+			idempotencyKey,
+		)
+	}
+
+	if replayed {
+		w.Header().Set(
+			"Idempotency-Replayed",
+			"true",
+		)
+
+		emitStructuredLog(
+			"INFO",
+			"Повторный идемпотентный запрос",
+			map[string]any{
+				"event":           "idempotency_replay",
+				"idempotency_key": idempotencyKey,
+				"order_id":        order.ID,
+				"status":          order.Status,
+			},
+		)
+
+		writeJSON(
+			w,
+			http.StatusOK,
+			order,
+		)
+		return
+	}
+
+	if idempotencyKey != "" {
+		w.Header().Set(
+			"Idempotency-Replayed",
+			"false",
+		)
 	}
 
 	emitStructuredLog(
